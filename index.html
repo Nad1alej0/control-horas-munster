@@ -82,12 +82,13 @@
       <label>Fecha<input id="entry-date" type="date" required /></label>
       <label>Estado del día<select id="day-status"><option value="trabajo">Trabajó</option><option value="franco">Franco</option><option value="ausente">Ausente</option><option value="licencia">Licencia</option><option value="vacaciones">Vacaciones</option></select></label>
       <div id="work-fields">
-      <div class="two"><label>Entrada<input id="start1" type="time" required /></label><label>Salida<input id="end1" type="time" required /></label></div>
+      <div class="time-block"><span>Entrada</span><div class="time-row"><select id="start1-hour" aria-label="Hora de entrada"></select><b>:</b><select id="start1-minute" aria-label="Minutos de entrada"></select><button type="button" class="time-now" data-now="start1">Usar hora actual</button></div></div>
+      <div id="exit1-fields" class="time-block"><span>Salida</span><div class="time-row"><select id="end1-hour" aria-label="Hora de salida"></select><b>:</b><select id="end1-minute" aria-label="Minutos de salida"></select><button type="button" class="time-now" data-now="end1">Usar hora actual</button></div></div>
       <label class="check"><input id="split" type="checkbox" /> Hizo horario cortado</label>
-      <div id="split-fields" class="two hidden"><label>Segunda entrada<input id="start2" type="time" /></label><label>Segunda salida<input id="end2" type="time" /></label></div>
+      <div id="split-fields" class="hidden"><div class="time-block"><span>Segunda entrada</span><div class="time-row"><select id="start2-hour"></select><b>:</b><select id="start2-minute"></select></div></div><div class="time-block"><span>Segunda salida</span><div class="time-row"><select id="end2-hour"></select><b>:</b><select id="end2-minute"></select></div></div></div>
       <label>Observación (opcional)<input id="entry-note" placeholder="Ej.: armado de desayuno" /></label>
       </div>
-      <button class="primary wide" value="default">Guardar horario</button>
+      <div id="entry-actions" class="entry-actions"><button id="save-entry-only" type="submit" class="secondary wide" value="pending">Guardar solo entrada</button><button id="save-complete" type="submit" class="primary wide" value="complete">Guardar jornada completa</button></div>
     </form>
   </dialog>
 
