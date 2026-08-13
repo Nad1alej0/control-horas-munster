@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#173f30" />
+  <meta name="description" content="Control semanal y banco de horas del equipo Munster" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+  <title>Control de Horas Munster</title>
+</head>
+<body>
+  <div id="toast" class="toast hidden"></div>
+  <section id="login" class="login-screen">
+    <div class="login-card">
+      <img src="icons/icon-192.png" alt="Reloj con destapador" />
+      <p class="eyebrow">MUNSTER · EQUIPO</p>
+      <h1>Control de horas</h1>
+      <p class="sub">Acceso exclusivo para encargadas</p>
+      <form id="login-form">
+        <label>Correo electrónico<input id="email" type="email" autocomplete="email" required /></label>
+        <label>Contraseña<input id="password" type="password" autocomplete="current-password" required /></label>
+        <button class="primary" type="submit">Ingresar</button>
+      </form>
+      <p id="login-error" class="error"></p>
+    </div>
+  </section>
+
+  <main id="app" class="app hidden">
+    <header class="topbar">
+      <div><span class="eyebrow">MUNSTER · EQUIPO</span><h1>Control de horas</h1></div>
+      <button id="logout" class="user-pill" title="Cerrar sesión"><span id="user-letter">N</span><small>Salir</small></button>
+    </header>
+    <section class="week-hero">
+      <div><p>SEMANA ACTUAL</p><h2 id="week-label">Cargando…</h2></div>
+      <span id="week-status" class="week-status">ABIERTA</span>
+    </section>
+    <nav class="tabs">
+      <button data-tab="daily" class="active">Registro diario</button>
+      <button data-tab="weekly">Resumen semanal</button>
+      <button data-tab="balances">Saldos</button>
+    </nav>
+
+    <section id="daily" class="tab-panel">
+      <div class="section-heading"><div><p id="today-label"></p><h3>¿Quién trabajó hoy?</h3></div><span id="daily-count"></span></div>
+      <div id="daily-list" class="employee-grid"></div>
+    </section>
+    <section id="weekly" class="tab-panel hidden">
+      <div class="section-heading"><div><p>CONTROL DE LA SEMANA</p><h3>Horas esperadas y realizadas</h3></div></div>
+      <div id="weekly-list" class="summary-list"></div>
+      <button id="close-week" class="primary wide">Cerrar semana y confirmar diferencias</button>
+    </section>
+    <section id="balances" class="tab-panel hidden">
+      <div class="section-heading"><div><p>BANCO DE HORAS</p><h3>Saldos pendientes</h3></div><span>Se trasladan automáticamente</span></div>
+      <div id="balance-list" class="balance-grid"></div>
+    </section>
+  </main>
+
+  <dialog id="entry-dialog">
+    <form id="entry-form" method="dialog">
+      <button class="close" value="cancel" formnovalidate>×</button>
+      <p class="eyebrow">REGISTRO DIARIO</p><h3 id="entry-name"></h3>
+      <input id="entry-moza" type="hidden" />
+      <label>Fecha<input id="entry-date" type="date" required /></label>
+      <div class="two"><label>Entrada<input id="start1" type="time" required /></label><label>Salida<input id="end1" type="time" required /></label></div>
+      <label class="check"><input id="split" type="checkbox" /> Hizo horario cortado</label>
+      <div id="split-fields" class="two hidden"><label>Segunda entrada<input id="start2" type="time" /></label><label>Segunda salida<input id="end2" type="time" /></label></div>
+      <label>Observación (opcional)<input id="entry-note" placeholder="Ej.: armado de desayuno" /></label>
+      <button class="primary wide" value="default">Guardar horario</button>
+    </form>
+  </dialog>
+
+  <dialog id="return-dialog">
+    <form id="return-form" method="dialog">
+      <button class="close" value="cancel" formnovalidate>×</button>
+      <p class="eyebrow">DEVOLUCIÓN DE HORAS</p><h3 id="return-name"></h3>
+      <input id="return-moza" type="hidden" />
+      <div class="balance-callout">Saldo pendiente <strong id="return-balance"></strong></div>
+      <div class="two"><label>Horas<input id="return-hours" type="number" min="0" value="1" /></label><label>Minutos<input id="return-minutes" type="number" min="0" max="59" value="0" /></label></div>
+      <label>Modalidad<select id="return-note"><option>Salió antes</option><option>Entró más tarde</option><option>Franco compensatorio</option><option>Otra</option></select></label>
+      <button class="primary wide" value="default">Confirmar devolución</button>
+    </form>
+  </dialog>
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
