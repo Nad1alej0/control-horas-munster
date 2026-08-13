@@ -69,6 +69,14 @@
       </div>
     </section>
     <section id="admin" class="tab-panel hidden">
+      <div class="section-heading"><div><p>MI CUENTA</p><h3>Cambiar mi contraseña</h3></div></div>
+      <div class="settings-card account-card">
+        <p class="hint">La contraseña nueva será privada y reemplazará inmediatamente a la anterior.</p>
+        <form id="password-form">
+          <div class="form-grid"><label>Nueva contraseña<input id="new-password" type="password" minlength="8" autocomplete="new-password" required /></label><label>Repetir contraseña<input id="repeat-password" type="password" minlength="8" autocomplete="new-password" required /></label></div>
+          <button class="primary" type="submit">Guardar nueva contraseña</button>
+        </form>
+      </div>
       <div class="section-heading"><div><p>ADMINISTRACIÓN</p><h3>Cerrar y eliminar un mes</h3></div></div>
       <div class="settings-card danger-zone"><p>Descargá el informe mensual antes de eliminar. Los saldos pendientes se trasladarán al mes siguiente; las mozas y los usuarios se conservarán.</p><label>Mes a eliminar<input id="delete-month" type="month" /></label><button id="preview-delete" class="danger-button">Revisar eliminación</button><div id="delete-preview" class="hidden"></div></div>
     </section>
