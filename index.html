@@ -9,6 +9,7 @@
   <link rel="icon" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="features.css" />
   <title>Control de Horas Munster</title>
 </head>
 <body>
@@ -41,9 +42,12 @@
       <button data-tab="daily" class="active">Registro diario</button>
       <button data-tab="weekly">Resumen semanal</button>
       <button data-tab="balances">Saldos</button>
+      <button data-tab="reports">Informes</button>
+      <button data-tab="admin">Administración</button>
     </nav>
 
     <section id="daily" class="tab-panel">
+      <div class="date-nav"><button id="prev-day">← Anterior</button><input id="view-date" type="date" /><button id="today-btn">Hoy</button><button id="next-day">Siguiente →</button></div>
       <div class="section-heading"><div><p id="today-label"></p><h3>¿Quién trabajó hoy?</h3></div><span id="daily-count"></span></div>
       <div id="daily-list" class="employee-grid"></div>
     </section>
@@ -56,6 +60,18 @@
       <div class="section-heading"><div><p>BANCO DE HORAS</p><h3>Saldos pendientes</h3></div><span>Se trasladan automáticamente</span></div>
       <div id="balance-list" class="balance-grid"></div>
     </section>
+    <section id="reports" class="tab-panel hidden">
+      <div class="section-heading"><div><p>DOCUMENTOS</p><h3>Generar informe PDF</h3></div></div>
+      <div class="settings-card">
+        <div class="form-grid"><label>Período<select id="report-period"><option value="week">Semana actual</option><option value="month">Mes</option></select></label><label id="report-month-wrap" class="hidden">Mes<input id="report-month" type="month" /></label><label>Tipo<select id="report-type"><option value="general">General del equipo</option><option value="individual">Individual</option></select></label><label id="report-employee-wrap" class="hidden">Moza<select id="report-employee"></select></label></div>
+        <p class="hint">Si la semana está abierta, el PDF se marcará como informe provisorio.</p>
+        <button id="download-pdf" class="primary">Descargar PDF</button>
+      </div>
+    </section>
+    <section id="admin" class="tab-panel hidden">
+      <div class="section-heading"><div><p>ADMINISTRACIÓN</p><h3>Cerrar y eliminar un mes</h3></div></div>
+      <div class="settings-card danger-zone"><p>Descargá el informe mensual antes de eliminar. Los saldos pendientes se trasladarán al mes siguiente; las mozas y los usuarios se conservarán.</p><label>Mes a eliminar<input id="delete-month" type="month" /></label><button id="preview-delete" class="danger-button">Revisar eliminación</button><div id="delete-preview" class="hidden"></div></div>
+    </section>
   </main>
 
   <dialog id="entry-dialog">
@@ -64,10 +80,13 @@
       <p class="eyebrow">REGISTRO DIARIO</p><h3 id="entry-name"></h3>
       <input id="entry-moza" type="hidden" />
       <label>Fecha<input id="entry-date" type="date" required /></label>
+      <label>Estado del día<select id="day-status"><option value="trabajo">Trabajó</option><option value="franco">Franco</option><option value="ausente">Ausente</option><option value="licencia">Licencia</option><option value="vacaciones">Vacaciones</option></select></label>
+      <div id="work-fields">
       <div class="two"><label>Entrada<input id="start1" type="time" required /></label><label>Salida<input id="end1" type="time" required /></label></div>
       <label class="check"><input id="split" type="checkbox" /> Hizo horario cortado</label>
       <div id="split-fields" class="two hidden"><label>Segunda entrada<input id="start2" type="time" /></label><label>Segunda salida<input id="end2" type="time" /></label></div>
       <label>Observación (opcional)<input id="entry-note" placeholder="Ej.: armado de desayuno" /></label>
+      </div>
       <button class="primary wide" value="default">Guardar horario</button>
     </form>
   </dialog>
