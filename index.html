@@ -69,6 +69,15 @@
       </div>
     </section>
     <section id="admin" class="tab-panel hidden">
+      <div class="section-heading"><div><p>MARCADOR DE PERSONAL</p><h3>Configurar computadora y PIN</h3></div></div>
+      <div class="settings-card kiosk-admin">
+        <div class="kiosk-admin-top"><div><h4>Computadora de fichaje</h4><p class="hint">Generá un código de un solo uso. Vence en 15 minutos y sirve para habilitar únicamente el navegador de la computadora del trabajo.</p></div><a class="secondary link-button" href="fichaje.html" target="_blank">Abrir marcador</a></div>
+        <div class="activation-form"><label>Nombre de la computadora<input id="device-name" value="Computadora Munster" /></label><button id="generate-device-code" class="primary" type="button">Generar código de activación</button></div>
+        <div id="activation-result" class="activation-result hidden"></div>
+        <hr />
+        <h4>PIN del personal</h4><p class="hint">Cada PIN debe tener entre 4 y 6 números. No se mostrará nuevamente: solamente puede reemplazarse.</p>
+        <div id="pin-list" class="pin-list"></div>
+      </div>
       <div class="section-heading"><div><p>MI CUENTA</p><h3>Cambiar mi contraseña</h3></div></div>
       <div class="settings-card account-card">
         <p class="hint">La contraseña nueva será privada y reemplazará inmediatamente a la anterior.</p>
@@ -109,6 +118,16 @@
       <div class="two"><label>Horas<input id="return-hours" type="number" min="0" value="1" /></label><label>Minutos<input id="return-minutes" type="number" min="0" max="59" value="0" /></label></div>
       <label>Modalidad<select id="return-note"><option>Salió antes</option><option>Entró más tarde</option><option>Franco compensatorio</option><option>Otra</option></select></label>
       <button class="primary wide" value="default">Confirmar devolución</button>
+    </form>
+  </dialog>
+  <dialog id="pin-admin-dialog">
+    <form id="pin-admin-form">
+      <button type="button" id="pin-admin-close" class="close">×</button>
+      <p class="eyebrow">PIN DEL MARCADOR</p><h3 id="pin-admin-name"></h3>
+      <input id="pin-admin-moza" type="hidden" />
+      <label>Nuevo PIN<input id="pin-admin-value" type="password" inputmode="numeric" pattern="[0-9]{4,6}" minlength="4" maxlength="6" autocomplete="off" required /></label>
+      <label>Repetir PIN<input id="pin-admin-repeat" type="password" inputmode="numeric" pattern="[0-9]{4,6}" minlength="4" maxlength="6" autocomplete="off" required /></label>
+      <button class="primary wide" type="submit">Guardar PIN</button>
     </form>
   </dialog>
   <script src="config.js"></script>

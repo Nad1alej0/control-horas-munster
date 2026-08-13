@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#173f30" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="fichaje.css" />
+  <title>Marcador de Personal · Munster</title>
+</head>
+<body>
+  <div id="message" class="message hidden"></div>
+  <main class="kiosk-shell">
+    <header><img src="icons/icon-192.png" alt="Munster" /><div><p>MUNSTER · PERSONAL</p><h1>Marcador de horarios</h1></div><div class="clock"><strong id="clock-time">--:--</strong><span id="clock-date"></span></div></header>
+
+    <section id="device-setup" class="setup-card hidden">
+      <h2>Habilitar esta computadora</h2>
+      <p>Una encargada debe ingresar una sola vez el código creado desde Administración.</p>
+      <form id="device-form"><input id="device-code" type="password" minlength="6" placeholder="Código del equipo" autocomplete="off" required /><button>Habilitar computadora</button></form>
+    </section>
+
+    <section id="kiosk" class="hidden">
+      <div class="intro"><div><p>MARCAR EN POCOS PASOS</p><h2>Elegí tu nombre</h2></div><button id="refresh" class="light">Actualizar</button></div>
+      <div id="people" class="people-grid"></div>
+      <p class="privacy">La hora se toma automáticamente. Las marcaciones no pueden editarse desde esta pantalla.</p>
+    </section>
+  </main>
+
+  <dialog id="pin-dialog">
+    <form id="pin-form">
+      <button type="button" id="close-dialog" class="close">×</button>
+      <p class="eyebrow">MARCACIÓN PERSONAL</p><h2 id="person-name"></h2>
+      <input id="person-id" type="hidden" />
+      <label>Ingresá tu PIN<input id="pin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" autocomplete="off" required /></label>
+      <div id="actions" class="actions"></div>
+    </form>
+  </dialog>
+  <script src="config.js"></script>
+  <script type="module" src="fichaje.js"></script>
+</body>
+</html>
