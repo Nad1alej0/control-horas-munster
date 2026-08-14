@@ -57,7 +57,7 @@
       <button id="close-week" class="primary wide">Cerrar semana y confirmar diferencias</button>
     </section>
     <section id="balances" class="tab-panel hidden">
-      <div class="section-heading"><div><p>BANCO DE HORAS</p><h3>Saldos pendientes</h3></div><span>Se trasladan automáticamente</span></div>
+      <div class="section-heading"><div><p>BANCO DE HORAS</p><h3>Saldos y compensaciones</h3></div><span>Los saldos confirmados se trasladan automáticamente</span></div>
       <div id="balance-list" class="balance-grid"></div>
     </section>
     <section id="reports" class="tab-panel hidden">
@@ -112,12 +112,16 @@
   <dialog id="return-dialog">
     <form id="return-form" method="dialog">
       <button class="close" value="cancel" formnovalidate>×</button>
-      <p class="eyebrow">DEVOLUCIÓN DE HORAS</p><h3 id="return-name"></h3>
+      <p class="eyebrow">MOVIMIENTO DE HORAS</p><h3 id="return-name"></h3>
       <input id="return-moza" type="hidden" />
-      <div class="balance-callout">Saldo pendiente <strong id="return-balance"></strong></div>
+      <div class="balance-callout">Saldo confirmado disponible <strong id="return-balance"></strong></div>
+      <label>¿Qué ocurrió?<select id="return-type"><option value="compensacion_semanal">Compensación dentro de esta semana</option><option value="devolucion">Usar horas del banco anterior</option></select></label>
+      <p id="return-help" class="hint">Documenta horas hechas de más y compensadas dentro de esta misma semana. No descuenta el banco anterior.</p>
+      <label>Fecha<input id="return-date" type="date" required /></label>
       <div class="two"><label>Horas<input id="return-hours" type="number" min="0" value="1" /></label><label>Minutos<input id="return-minutes" type="number" min="0" max="59" value="0" /></label></div>
-      <label>Modalidad<select id="return-note"><option>Salió antes</option><option>Entró más tarde</option><option>Franco compensatorio</option><option>Otra</option></select></label>
-      <button class="primary wide" value="default">Confirmar devolución</button>
+      <label>Modalidad<select id="return-note"><option>Entró más tarde</option><option>Salió antes</option><option>Franco compensatorio</option><option>Otra</option></select></label>
+      <label>Detalle u observación<input id="return-observation" placeholder="Ej.: compensó horas realizadas el lunes" required /></label>
+      <button id="return-submit" class="primary wide" value="default">Guardar compensación</button>
     </form>
   </dialog>
   <dialog id="pin-admin-dialog">
