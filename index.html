@@ -54,6 +54,11 @@
     <section id="weekly" class="tab-panel hidden">
       <div class="section-heading"><div><p>CONTROL DE LA SEMANA</p><h3>Horas esperadas y realizadas</h3></div></div>
       <div id="weekly-list" class="summary-list"></div>
+      <div id="review-section" class="review-section hidden">
+        <div class="section-heading"><div><p>SOLO PARA ENCARGADAS</p><h3>Revisiones pendientes</h3></div><span id="review-count"></span></div>
+        <p class="hint">Aparecen aquí las jornadas finalizadas con menos de 8 horas. Las mozas no ven estas revisiones en el marcador.</p>
+        <div id="review-list" class="review-list"></div>
+      </div>
       <button id="close-week" class="primary wide">Cerrar semana y confirmar diferencias</button>
     </section>
     <section id="balances" class="tab-panel hidden">
@@ -97,7 +102,7 @@
       <p class="eyebrow">REGISTRO DIARIO</p><h3 id="entry-name"></h3>
       <input id="entry-moza" type="hidden" />
       <label>Fecha<input id="entry-date" type="date" required /></label>
-      <label>Estado del día<select id="day-status"><option value="trabajo">Trabajó</option><option value="franco">Franco</option><option value="ausente">Ausente</option><option value="licencia">Licencia</option><option value="vacaciones">Vacaciones</option></select></label>
+      <label>Estado del día<select id="day-status"><option value="trabajo">Trabajó</option><option value="franco">Franco</option><option value="feriado_completo">Feriado completo</option><option value="feriado_parcial">Feriado parcial</option><option value="ausente">Ausente</option><option value="licencia">Licencia</option><option value="vacaciones">Vacaciones</option></select></label>
       <div id="work-fields">
       <div class="time-block"><span>Entrada</span><div class="time-row"><select id="start1-hour" aria-label="Hora de entrada"></select><b>:</b><select id="start1-minute" aria-label="Minutos de entrada"></select><button type="button" class="time-now" data-now="start1">Usar hora actual</button></div></div>
       <div id="exit1-fields" class="time-block"><span>Salida</span><div class="time-row"><select id="end1-hour" aria-label="Hora de salida"></select><b>:</b><select id="end1-minute" aria-label="Minutos de salida"></select><button type="button" class="time-now" data-now="end1">Usar hora actual</button></div></div>
@@ -105,7 +110,7 @@
       <div id="split-fields" class="hidden"><div class="time-block"><span>Segunda entrada</span><div class="time-row"><select id="start2-hour"></select><b>:</b><select id="start2-minute"></select></div></div><div class="time-block"><span>Segunda salida</span><div class="time-row"><select id="end2-hour"></select><b>:</b><select id="end2-minute"></select></div></div></div>
       <label>Observación (opcional)<input id="entry-note" placeholder="Ej.: armado de desayuno" /></label>
       </div>
-      <div id="entry-actions" class="entry-actions"><button id="save-entry-only" type="submit" class="secondary wide" value="pending">Guardar solo entrada</button><button id="save-complete" type="submit" class="primary wide" value="complete">Guardar jornada completa</button></div>
+      <div id="entry-actions" class="entry-actions"><button id="schedule-holiday" type="submit" class="secondary wide hidden" value="schedule-holiday">Programar feriado parcial sin horario</button><button id="save-entry-only" type="submit" class="secondary wide" value="pending">Guardar solo entrada</button><button id="save-complete" type="submit" class="primary wide" value="complete">Guardar jornada completa</button></div>
     </form>
   </dialog>
 
@@ -122,6 +127,19 @@
       <label>Modalidad<select id="return-note"><option>Entró más tarde</option><option>Salió antes</option><option>Franco compensatorio</option><option>Otra</option></select></label>
       <label>Detalle u observación<input id="return-observation" placeholder="Ej.: compensó horas realizadas el lunes" required /></label>
       <button id="return-submit" class="primary wide" value="default">Guardar compensación</button>
+    </form>
+  </dialog>
+  <dialog id="review-dialog">
+    <form id="review-form">
+      <button type="button" id="review-close" class="close">×</button>
+      <p class="eyebrow">REVISIÓN DE JORNADA</p><h3 id="review-name"></h3>
+      <input id="review-entry" type="hidden" />
+      <input id="review-moza" type="hidden" />
+      <div class="balance-callout"><span id="review-date"></span><strong id="review-deficit"></strong></div>
+      <label>¿Cómo se resuelve?<select id="review-type"><option value="compensacion_semanal">Compensar con horas de esta misma semana</option><option value="devolucion">Usar horas del banco anterior</option><option value="diferencia">Dejar como diferencia semanal</option><option value="corregir">Corregir la marcación</option></select></label>
+      <p id="review-help" class="hint"></p>
+      <label id="review-observation-wrap">Observación<input id="review-observation" placeholder="Ej.: se compensó con el excedente del lunes" /></label>
+      <button id="review-submit" class="primary wide" type="submit">Confirmar revisión</button>
     </form>
   </dialog>
   <dialog id="pin-admin-dialog">
