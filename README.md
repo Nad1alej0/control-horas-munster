@@ -24,3 +24,20 @@ Los datos se almacenan en Supabase y el acceso requiere una cuenta autorizada.
 - Las jornadas normales finalizadas con menos de 8 horas aparecen únicamente a las encargadas en Revisiones pendientes.
 - Se pueden resolver como Compensar con horas de esta misma semana, Usar horas del banco anterior, Dejar como diferencia semanal o Corregir la marcación.
 - El marcador del personal solo confirma la salida y no muestra ninguna revisión interna.
+
+## Información y pendientes
+
+- La sección **Información** reúne días anteriores sin marcaciones, jornadas abiertas y jornadas cortas por revisar.
+- Un día vacío puede resolverse como franco, vacaciones, feriado completo, ausencia o licencia y queda registrado automáticamente.
+- Si fue feriado parcial u olvidó marcar, la aplicación abre directamente la carga manual de horarios en la fecha correcta.
+- El día actual no se considera vacío mientras todavía puede estar desarrollándose la jornada.
+- La semana no puede cerrarse hasta que sus siete días estén definidos para cada moza y no queden pendientes.
+
+## Crédito especial del 17/08/2026 al 23/08/2026
+
+- Ejecutar `activar-saldo-especial-semana.sql` una sola vez en Supabase.
+- Nadia recibe 4 horas; Tiara, Angie, Cele, Lore y Mili reciben 2 horas.
+- Al cerrar, primero se compensan las horas de más y de menos realizadas en la misma semana.
+- Después se usa automáticamente solamente el crédito especial necesario.
+- El crédito especial que no se utilice vence al cerrar y no pasa a la semana siguiente.
+- En el marcador de personal, el horario cortado se muestra como `Cortado · tramo 1` y `Cortado · tramo 2`.

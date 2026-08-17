@@ -42,6 +42,7 @@
       <button data-tab="daily" class="active">Registro diario</button>
       <button data-tab="weekly">Resumen semanal</button>
       <button data-tab="balances">Saldos</button>
+      <button data-tab="information">Información <span id="information-badge" class="tab-badge hidden">0</span></button>
       <button data-tab="reports">Informes</button>
       <button data-tab="admin">Administración</button>
     </nav>
@@ -64,6 +65,23 @@
     <section id="balances" class="tab-panel hidden">
       <div class="section-heading"><div><p>BANCO DE HORAS</p><h3>Saldos y compensaciones</h3></div><span>Los saldos confirmados se trasladan automáticamente</span></div>
       <div id="balance-list" class="balance-grid"></div>
+    </section>
+    <section id="information" class="tab-panel hidden">
+      <div class="section-heading"><div><p>CONTROL PARA ENCARGADAS</p><h3>Información y pendientes</h3></div><span id="information-total"></span></div>
+      <p class="hint">Aquí aparecen automáticamente los días anteriores que todavía necesitan una explicación. Las mozas no ven esta información en el marcador.</p>
+      <div id="information-ok" class="information-ok hidden">✓ No hay pendientes de días anteriores.</div>
+      <div id="missing-days-section" class="information-group hidden">
+        <div class="information-title"><div><span class="information-icon">?</span><div><h4>Días sin marcaciones</h4><p>Indicá qué ocurrió y la aplicación registrará el día.</p></div></div><strong id="missing-days-count"></strong></div>
+        <div id="missing-days-list" class="information-list"></div>
+      </div>
+      <div id="open-marks-section" class="information-group hidden">
+        <div class="information-title"><div><span class="information-icon">!</span><div><h4>Marcaciones incompletas</h4><p>Entradas, cortes o regresos que todavía no tienen salida final.</p></div></div><strong id="open-marks-count"></strong></div>
+        <div id="open-marks-list" class="information-list"></div>
+      </div>
+      <div id="short-reviews-section" class="information-group hidden">
+        <div class="information-title"><div><span class="information-icon">✓</span><div><h4>Jornadas cortas por revisar</h4><p>Definí cómo se compensó una jornada normal menor a ocho horas.</p></div></div><strong id="short-reviews-count"></strong></div>
+        <div id="short-reviews-list" class="information-list"></div>
+      </div>
     </section>
     <section id="reports" class="tab-panel hidden">
       <div class="section-heading"><div><p>DOCUMENTOS</p><h3>Generar informe PDF</h3></div></div>
@@ -114,6 +132,20 @@
     </form>
   </dialog>
 
+  <dialog id="missing-day-dialog">
+    <form id="missing-day-form">
+      <button type="button" id="missing-day-close" class="close">×</button>
+      <p class="eyebrow">DÍA SIN MARCACIONES</p><h3 id="missing-day-name"></h3>
+      <input id="missing-day-moza" type="hidden" />
+      <input id="missing-day-date" type="hidden" />
+      <div class="balance-callout"><span>Fecha pendiente</span><strong id="missing-day-date-label"></strong></div>
+      <label>¿Qué ocurrió?<select id="missing-day-status"><option value="franco">Fue franco</option><option value="vacaciones">Vacaciones</option><option value="feriado_completo">Feriado completo</option><option value="feriado_parcial">Feriado parcial — cargar horario</option><option value="olvido">Olvidó marcar — cargar horario</option><option value="ausente">Ausencia</option><option value="licencia">Licencia</option><option value="pendiente">Dejar pendiente por ahora</option></select></label>
+      <label id="missing-day-note-wrap">Observación (opcional)<input id="missing-day-note" placeholder="Ej.: franco informado en la planilla" /></label>
+      <p id="missing-day-help" class="hint"></p>
+      <button id="missing-day-submit" class="primary wide" type="submit">Registrar automáticamente</button>
+    </form>
+  </dialog>
+
   <dialog id="return-dialog">
     <form id="return-form" method="dialog">
       <button class="close" value="cancel" formnovalidate>×</button>
@@ -136,7 +168,7 @@
       <input id="review-entry" type="hidden" />
       <input id="review-moza" type="hidden" />
       <div class="balance-callout"><span id="review-date"></span><strong id="review-deficit"></strong></div>
-      <label>¿Cómo se resuelve?<select id="review-type"><option value="compensacion_semanal">Compensar con horas de esta misma semana</option><option value="devolucion">Usar horas del banco anterior</option><option value="diferencia">Dejar como diferencia semanal</option><option value="corregir">Corregir la marcación</option></select></label>
+      <label>¿Cómo se resuelve?<select id="review-type"><option value="calculo_automatico">Calcular automáticamente al cerrar la semana</option><option value="compensacion_semanal">Compensar con horas de esta misma semana</option><option value="devolucion">Usar horas del banco anterior</option><option value="diferencia">Dejar como diferencia semanal</option><option value="corregir">Corregir la marcación</option></select></label>
       <p id="review-help" class="hint"></p>
       <label id="review-observation-wrap">Observación<input id="review-observation" placeholder="Ej.: se compensó con el excedente del lunes" /></label>
       <button id="review-submit" class="primary wide" type="submit">Confirmar revisión</button>
