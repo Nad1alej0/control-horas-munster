@@ -1,6 +1,15 @@
 -- FERIADO COMPLETO Y FERIADO PARCIAL
 -- Ejecutar una sola vez en Supabase > SQL Editor antes de subir la actualización.
 
+-- Permite iniciar el segundo tramo y dejar su salida pendiente.
+alter table public.registros_horarios
+  drop constraint if exists segundo_tramo_completo;
+alter table public.registros_horarios
+  drop constraint if exists segundo_tramo_valido;
+alter table public.registros_horarios
+  add constraint segundo_tramo_valido
+  check (salida_2 is null or entrada_2 is not null);
+
 alter table public.registros_horarios
   drop constraint if exists registros_horarios_estado_dia_check;
 

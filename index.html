@@ -10,6 +10,8 @@
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="features.css" />
+  <link rel="stylesheet" href="simple.css" />
+  <link rel="stylesheet" href="week-navigation.css" />
   <title>Control de Horas Munster</title>
 </head>
 <body>
@@ -35,9 +37,14 @@
       <button id="logout" class="user-pill" title="Cerrar sesión"><span id="user-letter">N</span><small>Salir</small></button>
     </header>
     <section class="week-hero">
-      <div><p>SEMANA ACTUAL</p><h2 id="week-label">Cargando…</h2></div>
+      <div><p id="week-kicker">SEMANA ACTUAL</p><h2 id="week-label">Cargando…</h2></div>
       <span id="week-status" class="week-status">ABIERTA</span>
     </section>
+    <div class="week-navigation" aria-label="Navegación por semanas">
+      <button id="prev-week" type="button">← Semana anterior</button>
+      <button id="current-week" type="button">Semana actual</button>
+      <button id="next-week" type="button">Semana siguiente →</button>
+    </div>
     <nav class="tabs">
       <button data-tab="daily" class="active">Registro diario</button>
       <button data-tab="weekly">Resumen semanal</button>
@@ -186,5 +193,6 @@
   </dialog>
   <script src="config.js"></script>
   <script type="module" src="app.js"></script>
+  <script type="module" src="ui-labels.js"></script>
 </body>
 </html>

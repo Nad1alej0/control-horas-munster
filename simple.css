@@ -1,0 +1,5 @@
+.simple-mode .tabs [data-tab="balances"] { display: none; }
+.simple-mode #review-section { display: none !important; }
+.simple-mode #close-week { font-size: 16px; padding: 16px; }
+.simple-mode #close-week::before { content: "✓ "; }
+.simple-mode #return-dialog { display: none; }

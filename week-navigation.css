@@ -1,0 +1,34 @@
+.week-navigation {
+  display: flex;
+  gap: 8px;
+  margin: -6px 0 18px;
+}
+
+.week-navigation button {
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--green);
+  border-radius: 9px;
+  padding: 9px 13px;
+  font-weight: 800;
+}
+
+.week-navigation button:disabled {
+  background: #ece9df;
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  .week-navigation {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .week-navigation button {
+    padding: 10px 7px;
+  }
+
+  .week-navigation #next-week {
+    grid-column: 1 / 3;
+  }
+}
