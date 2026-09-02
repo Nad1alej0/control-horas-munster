@@ -93,7 +93,7 @@
     <section id="reports" class="tab-panel hidden">
       <div class="section-heading"><div><p>DOCUMENTOS</p><h3>Generar informe PDF</h3></div></div>
       <div class="settings-card">
-        <div class="form-grid"><label>Período<select id="report-period"><option value="week">Semana actual</option><option value="month">Mes</option></select></label><label id="report-month-wrap" class="hidden">Mes<input id="report-month" type="month" /></label><label>Tipo<select id="report-type"><option value="general">General del equipo</option><option value="individual">Individual</option></select></label><label id="report-employee-wrap" class="hidden">Moza<select id="report-employee"></select></label></div>
+        <div class="form-grid"><label>Período<select id="report-period"><option value="week">Una semana</option><option value="range">Acumulado entre semanas</option></select></label><label id="report-range-start-wrap" class="hidden">Desde la semana que comienza<input id="report-range-start" type="date" /></label><label id="report-range-end-wrap" class="hidden">Hasta la semana que termina<input id="report-range-end" type="date" /></label><label>Tipo<select id="report-type"><option value="general">General del equipo</option><option value="individual">Individual</option></select></label><label id="report-employee-wrap" class="hidden">Moza<select id="report-employee"></select></label><label id="report-month-wrap" class="hidden">Mes<input id="report-month" type="month" /></label></div>
         <p class="hint">Si la semana está abierta, el PDF se marcará como informe provisorio.</p>
         <button id="download-pdf" class="primary">Descargar PDF</button>
       </div>
@@ -192,7 +192,7 @@
     </form>
   </dialog>
   <script src="config.js"></script>
-  <script type="module" src="app.js?v=salida-pendiente-3"></script>
+  <script type="module" src="app.js?v=pdf-cuentas-4"></script>
   <script type="module" src="ui-labels.js"></script>
 </body>
 </html>
