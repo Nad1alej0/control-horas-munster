@@ -1,125 +1,2215 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-import { calculateWeek as computeWeek, calculateBalance as computeBalance } from "./hours-engine.js";
+import {
+  calculateWeek as computeWeek,
+  calculateBalance as computeBalance,
+} from "./hours-engine.js";
 
-const cfg=window.MUNSTER_CONFIG||{},configured=cfg.supabaseKey&&!cfg.supabaseKey.includes("PEGAR_AQUI");
-const supabase=configured?createClient(cfg.supabaseUrl,cfg.supabaseKey):null;
-const simpleMode=new URLSearchParams(location.search).get("modo")==="simple";
-const $=id=>document.getElementById(id),localIso=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`,today=()=>localIso(new Date());
-const fmtDate=s=>new Intl.DateTimeFormat("es-AR",{day:"2-digit",month:"2-digit",year:"numeric",timeZone:"UTC"}).format(new Date(`${s}T12:00:00Z`));
-const fmtMin=(n,signed=false)=>{const sign=n<0?"−":signed&&n>0?"+":"",v=Math.abs(n),h=Math.floor(v/60),m=v%60;return v?`${sign}${h?`${h} h`:""}${h&&m?" ":""}${m?`${m} min`:""}`:"0 h"};
-const minBetween=(a,b)=>{if(!a||!b)return 0;const[ah,am]=a.split(":").map(Number),[bh,bm]=b.split(":").map(Number);let v=bh*60+bm-ah*60-am;if(v<0)v+=1440;return v};
-const timeParts=["start1","end1","start2","end2"];
-function setupTimeSelects(){for(const key of timeParts){$(key+"-hour").innerHTML=Array.from({length:24},(_,i)=>`<option>${String(i).padStart(2,"0")}</option>`).join("");$(key+"-minute").innerHTML=Array.from({length:60},(_,i)=>`<option>${String(i).padStart(2,"0")}</option>`).join("")}}
-function setTime(key,value){const[h,m]=(value||"00:00").split(":");$(key+"-hour").value=h;$(key+"-minute").value=m}
-function getTime(key){return `${$(key+"-hour").value}:${$(key+"-minute").value}`}
-function currentTime(){const d=new Date();return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`}
-const weekDates=(reference=new Date())=>{const d=new Date(reference),start=new Date(d),daysSinceMonday=(d.getDay()+6)%7;start.setDate(d.getDate()-daysSinceMonday);const end=new Date(start);end.setDate(start.getDate()+6);return[localIso(start),localIso(end)]};
-const currentWeekStart=()=>weekDates()[0];
-const shiftDate=(iso,days)=>{const d=new Date(`${iso}T12:00:00`);d.setDate(d.getDate()+days);return localIso(d)};
-let state={user:null,mozas:[],week:null,expected:[],entries:[],movements:[],viewDate:today(),selectedWeekStart:currentWeekStart()};
-function toast(message,error=false){const t=$("toast");t.textContent=message;t.className=`toast ${error?"bad":""}`;setTimeout(()=>t.classList.add("hidden"),2400)}
-function showLogin(message=""){ $("login").classList.remove("hidden");$("app").classList.add("hidden");$("login-error").textContent=message;if(!configured)$("login-error").textContent="Falta conectar la clave publicable de Supabase." }
-function showApp(){ $("login").classList.add("hidden");$("app").classList.remove("hidden");document.body.classList.toggle("simple-mode",simpleMode);$("user-letter").textContent=(state.user.email||"N")[0].toUpperCase();if(state.week){const isCurrent=state.week.fecha_inicio===currentWeekStart();$("week-kicker").textContent=isCurrent?"SEMANA ACTUAL":"SEMANA SELECCIONADA";$("next-week").disabled=isCurrent;$("current-week").disabled=isCurrent} }
-async function load(){const start=state.selectedWeekStart,end=shiftDate(start,6),isCurrent=start===currentWeekStart();let{data:week,error}=await supabase.from("semanas").select("*").eq("fecha_inicio",start).maybeSingle();if(error)throw error;if(!week&&!isCurrent){state.selectedWeekStart=currentWeekStart();state.viewDate=today();toast("Esa semana todavía no existe",true);return load()}if(!week){({data:week,error}=await supabase.from("semanas").insert({fecha_inicio:start,fecha_fin:end}).select().single());if(error)throw error;const{data:people,error:peopleError}=await supabase.from("mozas").select("id").eq("activa",true);if(peopleError)throw peopleError;const{error:defaultsError}=await supabase.from("horas_esperadas").insert(people.map(m=>({semana_id:week.id,moza_id:m.id,minutos_esperados:2400,cantidad_francos:2})));if(defaultsError)throw defaultsError}state.week=week;if(state.viewDate<start||state.viewDate>end)state.viewDate=isCurrent?today():start;
- const [m,e,r,mv]=await Promise.all([supabase.from("mozas").select("*").eq("activa",true).order("id"),supabase.from("horas_esperadas").select("*").eq("semana_id",week.id),supabase.from("registros_horarios").select("*").gte("fecha",start).lte("fecha",end),supabase.from("movimientos_horas").select("*").order("fecha")]);
- for(const x of[m,e,r,mv])if(x.error)throw x.error;state.mozas=m.data;state.expected=e.data;state.entries=r.data;state.movements=mv.data;render()}
-function expected(id){return state.expected.find(x=>x.moza_id===id)?.minutos_esperados??2400}
-const isWorkStatus=s=>s==="trabajo"||s==="feriado_parcial"||!s;
-const dayLabel=s=>({trabajo:"Trabajó",franco:"Franco",ausente:"Ausente",licencia:"Licencia",vacaciones:"Vacaciones",feriado_completo:"Feriado completo",feriado_parcial:"Feriado parcial",sin_definir:"Sin definir"}[s]||s);
-const actualEntryMinutes=e=>Number(e?.minutos_trabajados)||0;
-const creditedEntryMinutes=e=>e?.estado_dia==="feriado_completo"?480:e?.estado_dia==="feriado_parcial"?Math.max(480,actualEntryMinutes(e)):actualEntryMinutes(e);
-const holidayRecognitionEntry=e=>Math.max(0,creditedEntryMinutes(e)-actualEntryMinutes(e));
-function weekCalculation(id,entries=state.entries,movements=state.movements,expectedMinutes=expected(id)){return computeWeek({entries:entries.filter(x=>x.moza_id===id),movements:movements.filter(x=>x.moza_id===id&&(!state.week||x.semana_id===state.week.id)),expectedMinutes})}
-function actualWorked(id,entries=state.entries){return weekCalculation(id,entries).actualMinutes}
-function holidayRecognition(id,entries=state.entries){return weekCalculation(id,entries).holidayMinutes}
-function worked(id){return weekCalculation(id).computedMinutes}
-function balance(id){return computeBalance(state.movements.filter(x=>x.moza_id===id))}
-const specialCreditLabel="Crédito especial semanal",specialUseLabel="Uso automático del crédito especial",specialExpiryLabel="Vencimiento del crédito especial";
-function specialCreditMovements(id){return state.movements.filter(x=>x.moza_id===id&&x.semana_id===state.week.id&&[specialCreditLabel,specialUseLabel,specialExpiryLabel].includes(x.modalidad))}
-function specialCreditGranted(id){return specialCreditMovements(id).filter(x=>x.modalidad===specialCreditLabel).reduce((a,x)=>a+Math.max(0,Number(x.minutos)||0),0)}
-function specialCreditConsumed(id){return specialCreditMovements(id).filter(x=>x.modalidad===specialUseLabel).reduce((a,x)=>a+Math.abs(Number(x.minutos)||0),0)}
-function specialCreditExpired(id){return specialCreditMovements(id).filter(x=>x.modalidad===specialExpiryLabel).reduce((a,x)=>a+Math.abs(Number(x.minutos)||0),0)}
-function specialCreditAvailable(id){return Math.max(0,specialCreditGranted(id)-specialCreditConsumed(id)-specialCreditExpired(id))}
-function movementMinutes(x){return Number(x.minutos_referencia)||Math.abs(Number(x.minutos)||0)}
-function weekMovements(id,type){return state.movements.filter(x=>x.moza_id===id&&x.semana_id===state.week.id&&x.tipo===type)}
-function bankUsed(id){return weekCalculation(id).bankUsedMinutes}
-function isWeekCompensation(x){return x.tipo==="ajuste"&&Number(x.minutos)===0&&movementMinutes(x)>0}
-function weekCompensated(id){return state.movements.filter(x=>x.moza_id===id&&x.semana_id===state.week.id&&isWeekCompensation(x)).reduce((a,x)=>a+movementMinutes(x),0)}
-function required(id){const calculation=weekCalculation(id);return Math.max(0,calculation.expectedMinutes-calculation.bankUsedMinutes)}
-const reviewToken=e=>`Revisión registro #${e.id}:`;
-function isReviewed(e){return state.movements.some(x=>String(x.observacion||"").startsWith(reviewToken(e)))}
-function pendingReviews(){return simpleMode?[]:state.entries.filter(e=>e.estado_dia==="trabajo"&&e.estado_marcacion==="finalizada"&&actualEntryMinutes(e)<480&&!isReviewed(e))}
-function plannedPartialHoliday(e){return e?.estado_dia==="feriado_parcial"&&e?.entrada_1?.slice(0,5)==="00:00"&&e?.salida_1?.slice(0,5)==="00:00"&&actualEntryMinutes(e)===0}
-function entryIsOpen(e){return Boolean(e&&isWorkStatus(e.estado_dia)&&!plannedPartialHoliday(e)&&(!e.salida_1||(e.entrada_2&&!e.salida_2)||(e.estado_marcacion&&e.estado_marcacion!=="finalizada")))}
-function previousWeekDates(){const dates=[],limit=today()<state.week.fecha_fin?today():state.week.fecha_fin;for(let d=new Date(`${state.week.fecha_inicio}T12:00:00`);localIso(d)<limit;d.setDate(d.getDate()+1))dates.push(localIso(d));return dates}
-function missingDays(){const dates=previousWeekDates(),existing=new Set(state.entries.map(e=>`${e.moza_id}|${e.fecha}`)),rows=[];for(const date of dates)for(const m of state.mozas)if(!existing.has(`${m.id}|${date}`))rows.push({moza:m,date});return rows}
-function renderInformation(){
- const missing=missingDays(),open=state.entries.filter(entryIsOpen),reviews=pendingReviews(),total=missing.length+open.length+reviews.length;
- const badge=$("information-badge");badge.textContent=total;badge.classList.toggle("hidden",!total);$("information-total").textContent=total?`${total} pendiente${total===1?"":"s"}`:"Todo al día";$("information-ok").classList.toggle("hidden",Boolean(total));
- $("missing-days-section").classList.toggle("hidden",!missing.length);$("missing-days-count").textContent=missing.length;$("missing-days-list").innerHTML=missing.map(x=>`<article class="information-card missing"><div class="avatar small">${x.moza.nombre[0]}</div><div><h4>${x.moza.nombre} no tiene marcaciones</h4><p>${fmtDate(x.date)}</p><strong>¿Qué ocurrió ese día?</strong></div><button data-resolve-missing="${x.moza.id}" data-missing-date="${x.date}">Resolver</button></article>`).join("");
- $("open-marks-section").classList.toggle("hidden",!open.length);$("open-marks-count").textContent=open.length;$("open-marks-list").innerHTML=open.map(e=>{const m=state.mozas.find(x=>x.id===e.moza_id),label=e.estado_marcacion==="en_corte"?"Salida al corte registrada · falta el regreso":e.estado_marcacion==="segundo_tramo"?"Segundo tramo abierto · falta la salida":"Entrada registrada · falta la salida";return`<article class="information-card open"><div class="avatar small">${m?.nombre?.[0]||"?"}</div><div><h4>${m?.nombre||"Moza"}</h4><p>${fmtDate(e.fecha)}</p><strong>${label}</strong></div><button data-open-pending="${e.id}">Completar</button></article>`}).join("");
- $("short-reviews-section").classList.toggle("hidden",!reviews.length);$("short-reviews-count").textContent=reviews.length;$("short-reviews-list").innerHTML=reviews.map(e=>{const m=state.mozas.find(x=>x.id===e.moza_id);return`<article class="information-card review"><div class="avatar small">${m?.nombre?.[0]||"?"}</div><div><h4>${m?.nombre||"Moza"}</h4><p>${fmtDate(e.fecha)} · ${fmtMin(actualEntryMinutes(e))} trabajadas</p><strong>${simpleMode?"Se calculará automáticamente al cerrar":`${fmtMin(480-actualEntryMinutes(e))} por revisar`}</strong></div>${simpleMode?`<button data-correct-entry="${e.id}">Corregir horario</button>`:`<button data-review="${e.id}">Revisar</button>`}</article>`}).join("");
+const cfg = window.MUNSTER_CONFIG || {},
+  configured = cfg.supabaseKey && !cfg.supabaseKey.includes("PEGAR_AQUI");
+const supabase = configured
+  ? createClient(cfg.supabaseUrl, cfg.supabaseKey)
+  : null;
+const simpleMode =
+  new URLSearchParams(location.search).get("modo") === "simple";
+const $ = (id) => document.getElementById(id),
+  localIso = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+  today = () => localIso(new Date());
+const fmtDate = (s) =>
+  new Intl.DateTimeFormat("es-AR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${s}T12:00:00Z`));
+const fmtMin = (n, signed = false) => {
+  const sign = n < 0 ? "−" : signed && n > 0 ? "+" : "",
+    v = Math.abs(n),
+    h = Math.floor(v / 60),
+    m = v % 60;
+  return v
+    ? `${sign}${h ? `${h} h` : ""}${h && m ? " " : ""}${m ? `${m} min` : ""}`
+    : "0 h";
+};
+const minBetween = (a, b) => {
+  if (!a || !b) return 0;
+  const [ah, am] = a.split(":").map(Number),
+    [bh, bm] = b.split(":").map(Number);
+  let v = bh * 60 + bm - ah * 60 - am;
+  if (v < 0) v += 1440;
+  return v;
+};
+const timeParts = ["start1", "end1", "start2", "end2"];
+function setupTimeSelects() {
+  for (const key of timeParts) {
+    $(key + "-hour").innerHTML = Array.from(
+      { length: 24 },
+      (_, i) => `<option>${String(i).padStart(2, "0")}</option>`,
+    ).join("");
+    $(key + "-minute").innerHTML = Array.from(
+      { length: 60 },
+      (_, i) => `<option>${String(i).padStart(2, "0")}</option>`,
+    ).join("");
+  }
 }
-function render(){showApp();$("week-label").textContent=`${fmtDate(state.week.fecha_inicio)} al ${fmtDate(state.week.fecha_fin)}`;$("week-status").textContent=state.week.estado.toUpperCase();$("view-date").value=state.viewDate;$("today-label").textContent=`${state.viewDate===today()?"HOY":"FECHA"} · ${fmtDate(state.viewDate)}`;const todays=state.entries.filter(x=>x.fecha===state.viewDate);$("daily-count").textContent=`${todays.length} de ${state.mozas.length} definidas`;
- $("daily-list").innerHTML=state.mozas.map(m=>{const e=todays.find(x=>x.moza_id===m.id),workedDay=isWorkStatus(e?.estado_dia),plannedHoliday=e?.estado_dia==="feriado_parcial"&&e?.entrada_1?.slice(0,5)==="00:00"&&e?.salida_1?.slice(0,5)==="00:00"&&actualEntryMinutes(e)===0,pending=Boolean(workedDay&&e&&!plannedHoliday&&(!e.salida_1||(e.entrada_2&&!e.salida_2)||(e.estado_marcacion&&e.estado_marcacion!=="finalizada"))),markState=e?.estado_marcacion==="finalizada"&&!e.salida_1?"trabajando":e?.estado_marcacion,pendingText=markState==="en_corte"?"En corte · regreso pendiente":markState==="segundo_tramo"?"Segundo tramo · salida pendiente":"Salida pendiente",schedule=e?(markState==="en_corte"&&e.salida_1?`${e.entrada_1.slice(0,5)}–${e.salida_1.slice(0,5)}`:markState==="segundo_tramo"&&e.salida_1&&e.entrada_2?`${e.entrada_1.slice(0,5)}–${e.salida_1.slice(0,5)} / ${e.entrada_2.slice(0,5)}`:e.entrada_1?.slice(0,5)||""):"",completed=e&&e.salida_1?`${e.entrada_1?.slice(0,5)||"--:--"}–${e.salida_1.slice(0,5)}${e.entrada_2&&e.salida_2?` / ${e.entrada_2.slice(0,5)}–${e.salida_2.slice(0,5)}`:""}`:"Salida pendiente",holidayLine=e?.estado_dia==="feriado_parcial"?`<strong>Feriado parcial${plannedHoliday?" · horario pendiente":` · ${fmtMin(creditedEntryMinutes(e))} computadas`}</strong>`:"";return`<article class="employee-card ${pending?'open-shift':''}"><div class="avatar">${m.nombre[0]}</div><div class="employee-info"><h4>${m.nombre}</h4>${e?(workedDay?(plannedHoliday?`<p>Feriado parcial programado</p>${holidayLine}`:pending?`<p>${schedule} · <span class="open-label"><i class="open-dot"></i>${pendingText}</span></p>${e.minutos_trabajados?`<strong>${fmtMin(e.minutos_trabajados)} parciales</strong>`:""}${holidayLine}`:`<p>${completed}</p><strong>${fmtMin(e.minutos_trabajados)} trabajadas</strong>${holidayLine}`):`<p class="day-state">${dayLabel(e.estado_dia)}${e.estado_dia==="feriado_completo"?" · 8 h computadas":""}</p>`):`<p class="muted">Sin definir</p>`}</div><button class="edit-btn ${e?"done":""}" data-entry="${m.id}">${pending?"Revisar":e?"Editar":"Cargar"}</button></article>`}).join("");
- $("weekly-list").innerHTML=state.mozas.map(m=>{const calculation=weekCalculation(m.id),base=expected(m.id),used=calculation.bankUsedMinutes,comp=weekCompensated(m.id),holiday=calculation.holidayMinutes,toDo=Math.max(0,calculation.expectedMinutes-used),diff=calculation.resultMinutes,open=state.week.estado==='abierta',label=open?(diff<0?'Restan registrar':'Excedente provisorio'):(diff>0?'Horas extra':diff<0?'Horas faltantes':'Diferencia'),display=open&&diff<0?fmtMin(Math.abs(diff)):fmtMin(diff,true),options=[0,8,16,24,32,40,48].map(h=>`<option value="${h*60}" ${base===h*60?'selected':''}>${h} h${h===0?' · Vacaciones':h===40?' · 2 francos':h===48?' · 1 franco':''}</option>`).join(''),adjustment=used||comp||holiday?`<div class="summary-adjustment"><span>Trabajadas realmente:<strong>${fmtMin(calculation.actualMinutes)}</strong></span>${holiday?`<span>Reconocidas por feriado:<strong>${fmtMin(holiday)}</strong></span>`:""}${comp?`<span>Compensadas esta semana:<strong>${fmtMin(comp)}</strong></span>`:""}${used?`<span>Usadas del banco:<strong>${fmtMin(used)}</strong></span>`:""}<span>A cumplir:<strong>${fmtMin(toDo)}</strong></span></div>`:"";return`<article class="summary-row"><div class="avatar small">${m.nombre[0]}</div><div class="summary-name"><h4>${m.nombre}</h4><p>${calculation.definedDays} días definidos</p></div><label>Horas base<select data-expected="${m.id}" ${state.week.estado==='cerrada'?'disabled':''}>${options}</select></label><div class="metric"><span>Horas computadas</span><strong>${fmtMin(calculation.computedMinutes)}</strong></div><div class="difference ${!open&&diff>0?'positive':!open&&diff<0?'negative':''}"><span>${label}</span><strong>${display}</strong></div>${adjustment}</article>`}).join("");
- const reviews=pendingReviews(),reviewOpen=state.week.estado==="abierta";$("review-section").classList.toggle("hidden",!reviewOpen||!reviews.length);$("review-count").textContent=`${reviews.length} pendiente${reviews.length===1?"":"s"}`;$("review-list").innerHTML=reviews.map(e=>{const m=state.mozas.find(x=>x.id===e.moza_id),deficit=480-actualEntryMinutes(e),schedule=`${e.entrada_1?.slice(0,5)||"--:--"}–${e.salida_1?.slice(0,5)||"--:--"}${e.entrada_2&&e.salida_2?` / ${e.entrada_2.slice(0,5)}–${e.salida_2.slice(0,5)}`:""}`;return`<article class="review-card"><div class="avatar small">${m?.nombre?.[0]||"?"}</div><div><h4>${m?.nombre||"Moza"}</h4><p>${fmtDate(e.fecha)} · ${schedule} · ${fmtMin(actualEntryMinutes(e))} trabajadas</p><strong>Faltan revisar ${fmtMin(deficit)}</strong></div><button data-review="${e.id}">Revisar</button></article>`}).join("");
- $("close-week").disabled=state.week.estado==="cerrada";$("close-week").textContent=state.week.estado==="cerrada"?"✓ Semana cerrada":"Cerrar semana y confirmar diferencias";
- $("balance-list").innerHTML=state.mozas.map(m=>{const calculation=weekCalculation(m.id),confirmed=balance(m.id),used=calculation.bankUsedMinutes,comp=weekCompensated(m.id),current=state.week.estado==='abierta'?calculation.resultMinutes:0,hasProvisional=current>0,status=confirmed>0?'HORAS A FAVOR':confirmed<0?'PENDIENTES DE TRABAJAR':hasProvisional?'PROVISORIO':state.week.estado==='abierta'?'SEMANA ABIERTA':'AL DÍA',confirmedText=confirmed>0?`${fmtMin(confirmed)} a favor acumuladas`:confirmed<0?`${fmtMin(Math.abs(confirmed))} pendientes de trabajar acumuladas`:'0 h',weekLine=state.week.estado==='abierta'?`<div class="week-preview ${current>0?'plus':''}"><span>Resultado provisorio de esta semana</span><strong>${current>0?`+${fmtMin(current)} a favor`:current<0?`${fmtMin(Math.abs(current))} pendientes de trabajar`:'Sin diferencia'}</strong>${current>0?'<small>Se incorporará al saldo cuando cierren la semana</small>':''}</div>`:'',currentMoves=state.movements.filter(x=>x.moza_id===m.id&&x.semana_id===state.week.id&&(x.tipo==='devolucion'||isWeekCompensation(x))),moveList=currentMoves.length?`<details class="movement-history"><summary>Ver ${currentMoves.length} movimiento${currentMoves.length===1?'':'s'} de esta semana</summary>${currentMoves.map(x=>`<div><span><b>${x.tipo==='devolucion'?'Uso de horas acumuladas':'Compensación'}</b> · ${fmtDate(x.fecha)} · ${fmtMin(movementMinutes(x))}<small>${x.modalidad||''}${x.observacion?` · ${x.observacion.replace(/^Compensación semanal:\s*/,'')}`:''}</small></span>${state.week.estado==='abierta'?`<button data-delete-movement="${x.id}" title="Eliminar movimiento">×</button>`:''}</div>`).join('')}</details>`:'';return`<article class="balance-card ${confirmed===0&&!hasProvisional?'settled':''} ${hasProvisional?'provisional-card':''}"><div class="balance-top"><div class="avatar">${m.nombre[0]}</div><span class="status">${status}</span></div><h4>${m.nombre}</h4><span class="confirmed-label">Saldo acumulado de semanas cerradas</span><strong>${confirmedText}</strong><div class="balance-breakdown"><div><span>Compensadas esta semana</span><strong>${fmtMin(comp)}</strong></div><div><span>Horas acumuladas utilizadas</span><strong>${fmtMin(used)}</strong></div></div>${weekLine}<button class="balance-action" data-return="${m.id}" ${state.week.estado==='cerrada'?'disabled':''}>Registrar compensación o uso</button>${moveList}</article>`}).join("");$("report-employee").innerHTML=state.mozas.map(m=>`<option value="${m.id}">${m.nombre}</option>`).join("");$("pin-list").innerHTML=state.mozas.map(m=>`<div class="pin-person"><span>${m.nombre}</span><button type="button" data-pin="${m.id}">Crear o cambiar PIN</button></div>`).join("");if(!$("report-month").value)$("report-month").value=today().slice(0,7);if(!$("delete-month").value){const d=new Date();d.setMonth(d.getMonth()-1);$("delete-month").value=localIso(d).slice(0,7)}renderInformation();bindDynamic()}
-function bindDynamic(){document.querySelectorAll("[data-entry]").forEach(b=>b.onclick=()=>openEntry(Number(b.dataset.entry)));document.querySelectorAll("[data-return]").forEach(b=>b.onclick=()=>openReturn(Number(b.dataset.return)));document.querySelectorAll("[data-review]").forEach(b=>b.onclick=()=>openReview(Number(b.dataset.review)));document.querySelectorAll("[data-resolve-missing]").forEach(b=>b.onclick=()=>openMissingDay(Number(b.dataset.resolveMissing),b.dataset.missingDate));document.querySelectorAll("[data-open-pending]").forEach(b=>b.onclick=()=>openPendingEntry(Number(b.dataset.openPending)));document.querySelectorAll("[data-delete-movement]").forEach(b=>b.onclick=()=>deleteMovement(Number(b.dataset.deleteMovement)));document.querySelectorAll("[data-expected]").forEach(s=>s.onchange=()=>saveExpected(Number(s.dataset.expected),Number(s.value)));document.querySelectorAll("[data-pin]").forEach(b=>b.onclick=()=>openPinAdmin(Number(b.dataset.pin)))}
-async function deleteMovement(id){if(!confirm("¿Eliminar esta compensación o uso de horas?"))return;const{error}=await supabase.from("movimientos_horas").delete().eq("id",id);if(error)return toast(error.message,true);await load();toast("Movimiento eliminado")}
-function openEntry(id){const m=state.mozas.find(x=>x.id===id),e=state.entries.find(x=>x.moza_id===id&&x.fecha===state.viewDate),status=e?.estado_dia||"trabajo",workLike=isWorkStatus(status),plannedHoliday=status==="feriado_parcial"&&e?.entrada_1?.slice(0,5)==="00:00"&&e?.salida_1?.slice(0,5)==="00:00"&&actualEntryMinutes(e)===0,open=Boolean(e&&workLike&&!plannedHoliday&&(!e.salida_1||(e.entrada_2&&!e.salida_2)||(e.estado_marcacion&&e.estado_marcacion!=="finalizada")));$("entry-name").textContent=m.nombre;$("entry-moza").value=id;$("entry-date").value=e?.fecha||state.viewDate;$("day-status").value=status;setTime("start1",plannedHoliday?"07:00":e?.entrada_1?.slice(0,5)||"07:00");setTime("end1",plannedHoliday?currentTime():e?.salida_1?.slice(0,5)||currentTime());$("split").checked=Boolean(e?.entrada_2);setTime("start2",e?.entrada_2?.slice(0,5)||"20:00");setTime("end2",e?.salida_2?.slice(0,5)||"00:00");$("entry-note").value=e?.observacion||"";$("work-fields").classList.toggle("hidden",!workLike);$("split-fields").classList.toggle("hidden",!$("split").checked);$("save-entry-only").classList.toggle("hidden",status!=="trabajo");$("save-entry-only").textContent=e?"Dejar salida pendiente":"Guardar solo entrada";$("schedule-holiday").classList.toggle("hidden",status!=="feriado_parcial"||Boolean(e&&!plannedHoliday));$("save-complete").textContent=open?"Completar o corregir jornada":status==="feriado_parcial"?"Guardar feriado parcial con horario":workLike?"Guardar jornada completa":"Guardar día";$("entry-dialog").showModal()}
-function openPendingEntry(entryId){const e=state.entries.find(x=>x.id===entryId);if(!e)return;state.viewDate=e.fecha;render();openEntry(e.moza_id)}
-function updateMissingDayDialog(){const status=$("missing-day-status").value,manual=status==="olvido"||status==="feriado_parcial",pending=status==="pendiente";$("missing-day-note-wrap").classList.toggle("hidden",pending);$("missing-day-help").textContent=manual?"Se abrirá directamente la carga de horarios para esa fecha.":pending?"El día continuará apareciendo en Información hasta que lo resuelvan.":"Al confirmar, el estado quedará registrado automáticamente.";$("missing-day-submit").textContent=manual?"Continuar y cargar horario":pending?"Dejar pendiente":"Registrar automáticamente"}
-function openMissingDay(id,date){const m=state.mozas.find(x=>x.id===id);if(!m)return;$("missing-day-moza").value=id;$("missing-day-date").value=date;$("missing-day-name").textContent=`${m.nombre} no tiene marcaciones`;$("missing-day-date-label").textContent=fmtDate(date);$("missing-day-status").value="franco";$("missing-day-note").value="";updateMissingDayDialog();$("missing-day-dialog").showModal()}
-function updateMovementDialog(){const bank=$("return-type").value==="devolucion";$("return-help").textContent=bank?"Descuenta horas confirmadas de semanas anteriores y reduce automáticamente lo que debe cumplir esta semana.":"Documenta horas hechas de más y compensadas dentro de esta misma semana. No descuenta el banco anterior.";$("return-submit").textContent=bank?"Confirmar uso del banco":"Guardar compensación"}
-function openReturn(id){const m=state.mozas.find(x=>x.id===id);$("return-name").textContent=m.nombre;$("return-moza").value=id;$("return-balance").textContent=fmtMin(Math.max(0,balance(id)));$("return-type").value="compensacion_semanal";$("return-date").value=state.viewDate>=state.week.fecha_inicio&&state.viewDate<=state.week.fecha_fin?state.viewDate:today();$("return-hours").value=1;$("return-minutes").value=0;$("return-observation").value="";updateMovementDialog();$("return-dialog").showModal()}
-function updateReviewDialog(){const type=$("review-type").value,helps={calculo_automatico:"La aplicación esperará al cierre: primero compensará las horas de más y de menos de esta semana y luego usará, si hace falta, el crédito especial disponible.",compensacion_semanal:"Deja constancia de que estas horas se compensan con un excedente realizado durante esta misma semana.",devolucion:"Usa horas confirmadas del banco anterior para cubrir la diferencia de esta jornada.",diferencia:"No realiza ningún descuento. La diferencia quedará incluida en el resultado semanal.",corregir:"Abre la jornada para modificar el horario si hubo un error de marcación."};$("review-help").textContent=helps[type];$("review-observation-wrap").classList.toggle("hidden",type==="corregir"||type==="calculo_automatico");$("review-submit").textContent=type==="corregir"?"Abrir jornada":"Confirmar revisión"}
-function openReview(entryId){const e=state.entries.find(x=>x.id===entryId),m=state.mozas.find(x=>x.id===e?.moza_id);if(!e||!m)return;$("review-entry").value=e.id;$("review-moza").value=m.id;$("review-name").textContent=m.nombre;$("review-date").textContent=fmtDate(e.fecha);$("review-deficit").textContent=`${fmtMin(480-actualEntryMinutes(e))} por revisar`;$("review-type").value="calculo_automatico";$("review-observation").value="";updateReviewDialog();$("review-dialog").showModal()}
-function openPinAdmin(id){const m=state.mozas.find(x=>x.id===id);$("pin-admin-name").textContent=m.nombre;$("pin-admin-moza").value=id;$("pin-admin-value").value="";$("pin-admin-repeat").value="";$("pin-admin-dialog").showModal();$("pin-admin-value").focus()}
-async function saveExpected(id,minutes){const{error}=await supabase.from("horas_esperadas").upsert({semana_id:state.week.id,moza_id:id,minutos_esperados:minutes,cantidad_francos:minutes===2400?2:minutes===2880?1:null},{onConflict:"semana_id,moza_id"});if(error)return toast(error.message,true);await load();toast("Horas esperadas guardadas")}
-async function recalculateClosedWeek(mozaId){if(state.week.estado!=="cerrada")return;const[entriesResult,movementsResult,expectedResult]=await Promise.all([supabase.from("registros_horarios").select("*").eq("moza_id",mozaId).gte("fecha",state.week.fecha_inicio).lte("fecha",state.week.fecha_fin),supabase.from("movimientos_horas").select("*").eq("moza_id",mozaId).eq("semana_id",state.week.id),supabase.from("horas_esperadas").select("minutos_esperados").eq("moza_id",mozaId).eq("semana_id",state.week.id).maybeSingle()]);for(const result of[entriesResult,movementsResult,expectedResult])if(result.error)throw result.error;const movements=movementsResult.data||[],manualMovements=movements.filter(x=>x.tipo!=="diferencia_semanal"&&x.modalidad!==specialUseLabel&&x.modalidad!==specialExpiryLabel),calculation=computeWeek({entries:entriesResult.data||[],movements:manualMovements,expectedMinutes:expectedResult.data?.minutos_esperados||0}),granted=movements.filter(x=>x.modalidad===specialCreditLabel).reduce((sum,x)=>sum+Math.max(0,Number(x.minutos)||0),0),specialUse=Math.min(granted,Math.max(0,-calculation.resultMinutes)),specialExpiry=Math.max(0,granted-specialUse),newRows=[];if(specialUse)newRows.push({moza_id:mozaId,semana_id:state.week.id,fecha:state.week.fecha_fin,minutos:-specialUse,minutos_referencia:specialUse,tipo:"devolucion",modalidad:specialUseLabel,observacion:"Recalculado automáticamente después de corregir un horario",cargado_por:state.user.id});if(specialExpiry)newRows.push({moza_id:mozaId,semana_id:state.week.id,fecha:state.week.fecha_fin,minutos:-specialExpiry,minutos_referencia:specialExpiry,tipo:"ajuste",modalidad:specialExpiryLabel,observacion:"Recalculado automáticamente después de corregir un horario",cargado_por:state.user.id});newRows.push({moza_id:mozaId,semana_id:state.week.id,fecha:state.week.fecha_fin,minutos:calculation.resultMinutes+specialUse,tipo:"diferencia_semanal",observacion:`Semana ${state.week.fecha_inicio} al ${state.week.fecha_fin} recalculada`,cargado_por:state.user.id});let{error}=await supabase.from("movimientos_horas").delete().eq("moza_id",mozaId).eq("semana_id",state.week.id).eq("tipo","diferencia_semanal");if(!error)({error}=await supabase.from("movimientos_horas").delete().eq("moza_id",mozaId).eq("semana_id",state.week.id).in("modalidad",[specialUseLabel,specialExpiryLabel]));if(!error)({error}=await supabase.from("movimientos_horas").insert(newRows));if(error)throw error}
-async function closeWeek(){const missing=missingDays();if(missing.length){alert(`Antes de cerrar la semana deben definir los ${missing.length} días sin marcaciones que aparecen en Información.`);return}const reviews=pendingReviews();if(reviews.length){alert(`Antes de cerrar la semana deben resolver las ${reviews.length} revisiones pendientes.`);return}const openEntries=state.entries.filter(entryIsOpen);if(openEntries.length){const names=openEntries.map(e=>`${state.mozas.find(m=>m.id===e.moza_id)?.nombre} (${fmtDate(e.fecha)})`).join("\n");alert(`No se puede cerrar la semana porque hay marcaciones pendientes:\n\n${names}`);return}const defined=new Map(state.mozas.map(m=>[m.id,state.entries.filter(e=>e.moza_id===m.id).length])),pending=state.mozas.filter(m=>defined.get(m.id)<7);if(pending.length){const names=pending.map(m=>`${m.nombre} (${defined.get(m.id)} de 7 días definidos)`).join("\n");alert(`No se puede cerrar la semana. Todavía faltan días por definir:\n\n${names}\n\nLos francos, vacaciones y feriados también deben registrarse.`);return}const preview=state.mozas.map(m=>{const c=weekCalculation(m.id),special=Math.min(specialCreditAvailable(m.id),Math.max(0,-c.resultMinutes)),result=c.resultMinutes+special,resultLabel=result>0?`${fmtMin(result)} a favor`:result<0?`${fmtMin(Math.abs(result))} faltantes`:"sin diferencia";return`${m.nombre}: ${fmtMin(c.actualMinutes)} trabajadas + ${fmtMin(c.holidayMinutes)} feriado + ${fmtMin(c.bankUsedMinutes+special)} banco - ${fmtMin(c.expectedMinutes)} base = ${resultLabel}`}).join("\n");if(!confirm(`Este será el movimiento que se guardará en el banco:\n\n${preview}\n\n¿Confirmar el cierre?`))return;
- const automaticRows=[],specialUsed=new Map();
- for(const m of state.mozas){const calculation=weekCalculation(m.id),available=specialCreditAvailable(m.id),deficit=Math.max(0,-calculation.resultMinutes),use=Math.min(available,deficit),expire=Math.max(0,available-use);specialUsed.set(m.id,use);if(use)automaticRows.push({moza_id:m.id,semana_id:state.week.id,fecha:state.week.fecha_fin,minutos:-use,minutos_referencia:use,tipo:"devolucion",modalidad:specialUseLabel,observacion:"Aplicado automáticamente al resultado final de la semana",cargado_por:state.user.id});if(expire)automaticRows.push({moza_id:m.id,semana_id:state.week.id,fecha:state.week.fecha_fin,minutos:-expire,minutos_referencia:expire,tipo:"ajuste",modalidad:specialExpiryLabel,observacion:"Saldo especial no utilizado; no se traslada a la semana siguiente",cargado_por:state.user.id})}
- let{error}=await supabase.from("movimientos_horas").delete().eq("semana_id",state.week.id).eq("tipo","diferencia_semanal");if(!error&&automaticRows.length)({error}=await supabase.from("movimientos_horas").insert(automaticRows));const rows=state.mozas.map(m=>({moza_id:m.id,semana_id:state.week.id,fecha:state.week.fecha_fin,minutos:weekCalculation(m.id).resultMinutes+(specialUsed.get(m.id)||0),tipo:"diferencia_semanal",observacion:`Semana ${state.week.fecha_inicio} al ${state.week.fecha_fin}`,cargado_por:state.user.id}));if(!error)({error}=await supabase.from("movimientos_horas").insert(rows));if(!error)({error}=await supabase.from("semanas").update({estado:"cerrada",cerrada_el:new Date().toISOString(),cerrada_por:state.user.id}).eq("id",state.week.id));if(error)return toast(error.message,true);await load();toast("Semana cerrada · crédito especial calculado automáticamente")}
-$("login-form").onsubmit=async e=>{e.preventDefault();if(!configured)return showLogin();const{data,error}=await supabase.auth.signInWithPassword({email:$("email").value.trim(),password:$("password").value});if(error)return showLogin("Correo o contraseña incorrectos");state.user=data.user;await load()};
-$("logout").onclick=async()=>{await supabase.auth.signOut();state.user=null;showLogin()};document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tab-panel").forEach(x=>x.classList.toggle("hidden",x.id!==b.dataset.tab))});
-setupTimeSelects();document.querySelectorAll("[data-now]").forEach(b=>b.onclick=()=>setTime(b.dataset.now,currentTime()));
-$("split").onchange=()=>$("split-fields").classList.toggle("hidden",!$("split").checked);$("day-status").onchange=()=>{const status=$("day-status").value,workLike=isWorkStatus(status),exists=Boolean(state.entries.find(x=>x.moza_id===Number($("entry-moza").value)&&x.fecha===$("entry-date").value));$("work-fields").classList.toggle("hidden",!workLike);$("save-entry-only").classList.toggle("hidden",status!=="trabajo");$("save-entry-only").textContent=exists?"Dejar salida pendiente":"Guardar solo entrada";$("schedule-holiday").classList.toggle("hidden",status!=="feriado_parcial"||exists);$("save-complete").textContent=status==="feriado_parcial"?"Guardar feriado parcial con horario":workLike?"Guardar jornada completa":"Guardar día"};$("entry-form").onsubmit=async e=>{e.preventDefault();const status=$("day-status").value,workLike=isWorkStatus(status),scheduleHoliday=status==="feriado_parcial"&&e.submitter?.value==="schedule-holiday",pending=status==="trabajo"&&e.submitter?.value==="pending",split=workLike&&!pending&&!scheduleHoliday&&$("split").checked,start1=scheduleHoliday?"00:00":getTime("start1"),end1=scheduleHoliday?"00:00":pending?null:getTime("end1"),minutes=workLike&&!pending&&!scheduleHoliday?minBetween(start1,end1)+(split?minBetween(getTime("start2"),getTime("end2")):0):0,previous=state.entries.find(x=>x.moza_id===Number($("entry-moza").value)&&x.fecha===$("entry-date").value),row={moza_id:Number($("entry-moza").value),fecha:$("entry-date").value,estado_dia:status,entrada_1:workLike?start1:"00:00",salida_1:workLike?end1:"00:00",entrada_2:split?getTime("start2"):null,salida_2:split?getTime("end2"):null,minutos_trabajados:minutes,observacion:$("entry-note").value||(scheduleHoliday?"Feriado parcial programado":status==="feriado_completo"?"Feriado completo":""),cargado_por:state.user.id,modificado_el:new Date().toISOString(),origen:previous?.origen==="marcador"?"correccion":"manual",estado_marcacion:pending?"trabajando":"finalizada"};const{error}=await supabase.from("registros_horarios").upsert(row,{onConflict:"moza_id,fecha"});if(error)return toast(error.message,true);try{await recalculateClosedWeek(row.moza_id)}catch(recalculationError){return toast(`El horario se guardó, pero no se pudo recalcular el saldo: ${recalculationError.message}`,true)}state.viewDate=row.fecha;$("entry-dialog").close();await load();toast(state.week.estado==="cerrada"?"Horario y saldo de la semana recalculados":scheduleHoliday?"Feriado parcial programado":pending?"Entrada guardada · salida pendiente":"Día guardado")};
-$("missing-day-status").onchange=updateMissingDayDialog;$("missing-day-close").onclick=()=>$("missing-day-dialog").close();$("missing-day-form").onsubmit=async e=>{e.preventDefault();const id=Number($("missing-day-moza").value),date=$("missing-day-date").value,status=$("missing-day-status").value;if(status==="pendiente"){$("missing-day-dialog").close();return toast("El día continúa pendiente")};if(status==="olvido"||status==="feriado_parcial"){$("missing-day-dialog").close();state.viewDate=date;render();openEntry(id);$("day-status").value=status==="olvido"?"trabajo":"feriado_parcial";$("day-status").dispatchEvent(new Event("change"));$("entry-note").value=$("missing-day-note").value.trim();return}const labels={franco:"Franco",vacaciones:"Vacaciones",feriado_completo:"Feriado completo",ausente:"Ausencia",licencia:"Licencia"},row={moza_id:id,fecha:date,estado_dia:status,entrada_1:"00:00",salida_1:"00:00",entrada_2:null,salida_2:null,minutos_trabajados:0,observacion:$("missing-day-note").value.trim()||`${labels[status]} registrado desde Información`,cargado_por:state.user.id,modificado_el:new Date().toISOString(),origen:"manual",estado_marcacion:"finalizada"};const{error}=await supabase.from("registros_horarios").upsert(row,{onConflict:"moza_id,fecha"});if(error)return toast(error.message,true);$("missing-day-dialog").close();await load();toast(`${labels[status]} registrado`)};
-$("return-type").onchange=updateMovementDialog;
-$("return-form").onsubmit=async e=>{e.preventDefault();const id=Number($("return-moza").value),type=$("return-type").value,minutes=Number($("return-hours").value)*60+Number($("return-minutes").value),date=$("return-date").value,observation=$("return-observation").value.trim();if(minutes<=0)return toast("Indicá una cantidad de horas",true);if(date<state.week.fecha_inicio||date>state.week.fecha_fin)return toast("La fecha debe pertenecer a la semana actual",true);if(!observation)return toast("Escribí una observación breve",true);if(type==="devolucion"&&minutes>Math.max(0,balance(id)))return toast("No hay suficientes horas confirmadas en el banco",true);const row={moza_id:id,semana_id:state.week.id,fecha:date,minutos:type==="devolucion"?-minutes:0,minutos_referencia:minutes,tipo:type==="devolucion"?"devolucion":"ajuste",modalidad:$("return-note").value,observacion:type==="devolucion"?observation:`Compensación semanal: ${observation}`,cargado_por:state.user.id};const{error}=await supabase.from("movimientos_horas").insert(row);if(error)return toast(error.message,true);$("return-dialog").close();await load();toast(type==="devolucion"?"Horas del banco aplicadas":"Compensación registrada")};$("close-week").onclick=closeWeek;
-$("review-type").onchange=updateReviewDialog;$("review-close").onclick=()=>$("review-dialog").close();$("review-form").onsubmit=async e=>{e.preventDefault();const entry=state.entries.find(x=>x.id===Number($("review-entry").value)),type=$("review-type").value;if(!entry)return toast("No se encontró la jornada",true);if(type==="corregir"){$("review-dialog").close();state.viewDate=entry.fecha;render();openEntry(entry.moza_id);return}const observation=$("review-observation").value.trim();if(type!=="calculo_automatico"&&!observation)return toast("Escribí una observación breve",true);const deficit=480-actualEntryMinutes(entry);if(type==="devolucion"&&deficit>Math.max(0,balance(entry.moza_id)))return toast("No hay suficientes horas confirmadas en el banco",true);const labels={calculo_automatico:"Cálculo automático al cierre",compensacion_semanal:"Compensar con horas de esta misma semana",devolucion:"Usar horas del banco anterior",diferencia:"Dejar como diferencia semanal"},row={moza_id:entry.moza_id,semana_id:state.week.id,fecha:entry.fecha,minutos:type==="devolucion"?-deficit:0,minutos_referencia:type==="diferencia"||type==="calculo_automatico"?0:deficit,tipo:type==="devolucion"?"devolucion":"ajuste",modalidad:labels[type],observacion:`${reviewToken(entry)} ${observation||"Se calculará con el resultado total de la semana"}`,cargado_por:state.user.id};const{error}=await supabase.from("movimientos_horas").insert(row);if(error)return toast(error.message,true);$("review-dialog").close();await load();toast(type==="calculo_automatico"?"Quedó programado para el cierre semanal":"Jornada revisada")};$("close-week").onclick=closeWeek;
-$("password-form").onsubmit=async e=>{e.preventDefault();const password=$("new-password").value,repeat=$("repeat-password").value;if(password.length<8)return toast("La contraseña debe tener al menos 8 caracteres",true);if(password!==repeat)return toast("Las contraseñas no coinciden",true);const button=e.submitter;button.disabled=true;button.textContent="Guardando…";const{error}=await supabase.auth.updateUser({password});button.disabled=false;button.textContent="Guardar nueva contraseña";if(error)return toast(error.message,true);e.target.reset();toast("Contraseña cambiada correctamente")};
-$("generate-device-code").onclick=async()=>{const button=$("generate-device-code");button.disabled=true;button.textContent="Generando…";const{data,error}=await supabase.rpc("crear_codigo_activacion",{p_nombre:$("device-name").value.trim()||"Computadora Munster"});button.disabled=false;button.textContent="Generar código de activación";if(error)return toast(error.message,true);const row=Array.isArray(data)?data[0]:data,box=$("activation-result");box.classList.remove("hidden");box.innerHTML=`<p>Código de un solo uso:</p><strong>${row.codigo}</strong><p>Vence en 15 minutos. Abrí el marcador en la computadora del trabajo e ingresalo allí.</p>`;toast("Código generado")};
-$("pin-admin-form").onsubmit=async e=>{e.preventDefault();const pin=$("pin-admin-value").value,repeat=$("pin-admin-repeat").value;if(pin!==repeat)return toast("Los PIN no coinciden",true);if(!/^\d{4,6}$/.test(pin))return toast("El PIN debe tener entre 4 y 6 números",true);const button=e.submitter;button.disabled=true;const{error}=await supabase.rpc("actualizar_pin_moza",{p_moza_id:Number($("pin-admin-moza").value),p_pin:pin});button.disabled=false;if(error)return toast(error.message,true);$("pin-admin-dialog").close();toast("PIN guardado correctamente")};$("pin-admin-close").onclick=()=>$("pin-admin-dialog").close();
-async function selectWeek(start,preferredDate=start){if(start>currentWeekStart())return;state.selectedWeekStart=start;state.viewDate=preferredDate;try{await load()}catch(e){toast(e.message,true)}}
-async function moveDay(delta){const next=shiftDate(state.viewDate,delta),nextWeek=weekDates(new Date(`${next}T12:00:00`))[0];if(nextWeek!==state.selectedWeekStart)return selectWeek(nextWeek,next);state.viewDate=next;render()}
-$("prev-day").onclick=()=>moveDay(-1);$("next-day").onclick=()=>moveDay(1);$("today-btn").onclick=()=>selectWeek(currentWeekStart(),today());$("view-date").onchange=e=>{const date=e.target.value,start=weekDates(new Date(`${date}T12:00:00`))[0];selectWeek(start,date)};
-$("prev-week").onclick=()=>selectWeek(shiftDate(state.selectedWeekStart,-7));$("next-week").onclick=()=>selectWeek(shiftDate(state.selectedWeekStart,7));$("current-week").onclick=()=>selectWeek(currentWeekStart(),today());
-$("report-period").onchange=()=>{const value=$("report-period").value,range=value==="range",summary=value==="summary";$("report-from-start-wrap").classList.toggle("hidden",!range);$("report-range-start-wrap").classList.toggle("hidden",!range);$("report-range-end-wrap").classList.toggle("hidden",!range);$("report-type-wrap").classList.toggle("hidden",summary);$("report-employee-wrap").classList.toggle("hidden",summary||$("report-type").value!=="individual");$("report-hint").textContent=summary?"Muestra el resultado confirmado de semanas cerradas y, por separado, las horas registradas en la semana actual.":"Si la semana está abierta, el PDF se marcará como informe provisorio.";if(range&&!$("report-range-start").value)$("report-range-start").value=state.week.fecha_inicio;if(range&&!$("report-range-end").value)$("report-range-end").value=state.week.fecha_fin};$("report-from-start").onchange=()=>{$("report-range-start").disabled=$("report-from-start").checked};$("report-type").onchange=()=>$("report-employee-wrap").classList.toggle("hidden",$("report-period").value==="summary"||$("report-type").value!=="individual");
-async function reportData(){const range=$("report-period").value==="range",fromStart=range&&$("report-from-start").checked;let start=range?$("report-range-start").value:state.week.fecha_inicio;const end=range?$("report-range-end").value:state.week.fecha_fin;if(fromStart){const first=await supabase.from("registros_horarios").select("fecha").order("fecha",{ascending:true}).limit(1).maybeSingle();if(first.error)throw first.error;if(!first.data)throw new Error("Todavía no hay marcaciones registradas");start=weekDates(new Date(`${first.data.fecha}T12:00:00`))[0]}if(!start||!end)throw new Error("Elegí la semana inicial y la semana final");if(start>end)throw new Error("La semana inicial no puede ser posterior a la final");const[entries,movements,historyMovements,weeks,expectedRows]=await Promise.all([supabase.from("registros_horarios").select("*").gte("fecha",start).lte("fecha",end).order("fecha"),supabase.from("movimientos_horas").select("*").gte("fecha",start).lte("fecha",end).order("fecha"),supabase.from("movimientos_horas").select("*").lte("fecha",end).order("fecha"),supabase.from("semanas").select("*").gte("fecha_inicio",start).lte("fecha_fin",end).order("fecha_inicio"),supabase.from("horas_esperadas").select("*")]);for(const x of[entries,movements,historyMovements,weeks,expectedRows])if(x.error)throw x.error;return{start,end,entries:entries.data,movements:movements.data,historyMovements:historyMovements.data,weeks:weeks.data,expectedRows:expectedRows.data,monthly:false,range,fromStart}}
-async function downloadSummaryPdf(){const button=$("download-pdf"),original=button.textContent;try{button.disabled=true;button.textContent="Preparando resumen…";const systemStart="2026-08-17",cutoff=today(),currentStart=currentWeekStart(),[weeksResult,movementsResult,entriesResult,expectedResult]=await Promise.all([supabase.from("semanas").select("id,fecha_inicio,fecha_fin,estado").gte("fecha_inicio",systemStart).lte("fecha_inicio",cutoff).order("fecha_inicio"),supabase.from("movimientos_horas").select("moza_id,semana_id,fecha,minutos,minutos_referencia,tipo").gte("fecha",systemStart).lte("fecha",cutoff),supabase.from("registros_horarios").select("moza_id,fecha,minutos_trabajados,estado_dia").gte("fecha",systemStart).lte("fecha",cutoff),supabase.from("horas_esperadas").select("moza_id,semana_id,minutos_esperados")]);for(const result of[weeksResult,movementsResult,entriesResult,expectedResult])if(result.error)throw result.error;const weeks=weeksResult.data||[],movements=movementsResult.data||[],entries=entriesResult.data||[],expectedRows=expectedResult.data||[],closedIds=new Set(weeks.filter(w=>w.fecha_fin<currentStart).map(w=>w.id)),openWeek=weeks.find(w=>w.estado==="abierta"&&w.fecha_inicio===currentStart),rows=state.mozas.map(m=>{const personMoves=movements.filter(x=>x.moza_id===m.id),completedWeeks=weeks.filter(w=>w.fecha_fin<currentStart);let confirmed=personMoves.filter(x=>x.fecha<currentStart).reduce((sum,x)=>sum+Number(x.minutos||0),0);for(const week of completedWeeks){if(personMoves.some(x=>x.semana_id===week.id&&x.tipo==="diferencia_semanal"))continue;const weekEntries=entries.filter(x=>x.moza_id===m.id&&x.fecha>=week.fecha_inicio&&x.fecha<=week.fecha_fin),weekMoves=personMoves.filter(x=>x.semana_id===week.id),base=expectedRows.find(x=>x.moza_id===m.id&&x.semana_id===week.id)?.minutos_esperados||0;confirmed+=computeWeek({entries:weekEntries,movements:weekMoves,expectedMinutes:base}).resultMinutes}const currentEntries=openWeek?entries.filter(x=>x.moza_id===m.id&&x.fecha>=currentStart):[],currentActual=currentEntries.reduce((sum,x)=>sum+actualEntryMinutes(x),0),currentHoliday=currentEntries.reduce((sum,x)=>sum+holidayRecognitionEntry(x),0);return{m,confirmed,currentActual,currentHoliday}}),{jsPDF}=await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm"),doc=new jsPDF({unit:"mm",format:"a4"}),green=[28,76,56],gold=[201,157,78],ink=[34,36,33],muted=[105,107,101],soft=[244,243,237],pale=[235,244,238],red=[151,63,54],safe=s=>String(s??"").replace(/[–—]/g,"-"),balanceText=v=>v>0?`${fmtMin(v)} a favor`:v<0?`${fmtMin(Math.abs(v))} pendientes de trabajar`:"0 h · al día";doc.setFillColor(...green);doc.rect(0,0,210,42,"F");doc.setFillColor(255,255,255);doc.circle(18,20,8,"F");doc.setTextColor(...green);doc.setFont("helvetica","bold");doc.setFontSize(14);doc.text("M",18,22.5,{align:"center"});doc.setTextColor(255,255,255);doc.setFontSize(8);doc.text("MUNSTER - EQUIPO",31,12);doc.setFontSize(18);doc.text("RESUMEN GENERAL DE SALDOS",31,23);doc.setFont("helvetica","normal");doc.setFontSize(9);doc.text(`Actualizado al ${fmtDate(cutoff)}`,31,32);doc.setDrawColor(...gold);doc.setLineWidth(1.2);doc.line(31,35,100,35);doc.setTextColor(...green);doc.setFont("helvetica","bold");doc.setFontSize(12);doc.text("SITUACION GENERAL DEL EQUIPO",14,55);doc.setTextColor(...muted);doc.setFont("helvetica","normal");doc.setFontSize(8.5);doc.text(`Saldos confirmados desde el ${fmtDate(systemStart)}. La semana actual se informa por separado.`,14,62);let y=70;doc.setFillColor(...green);doc.rect(14,y,182,11,"F");doc.setTextColor(255,255,255);doc.setFont("helvetica","bold");doc.setFontSize(7.5);doc.text("MOZA",19,y+7);doc.text("RESULTADO DE SEMANAS CERRADAS",56,y+7);doc.text("SEMANA ACTUAL EN CURSO",142,y+7);y+=11;for(const row of rows){doc.setFillColor(...soft);doc.rect(14,y,182,18,"F");doc.setFillColor(...green);doc.circle(22,y+9,5,"F");doc.setTextColor(255,255,255);doc.setFont("helvetica","bold");doc.setFontSize(8);doc.text(row.m.nombre[0].toUpperCase(),22,y+11,{align:"center"});doc.setTextColor(...ink);doc.setFontSize(10);doc.text(safe(row.m.nombre),31,y+10.5);doc.setTextColor(...(row.confirmed<0?red:green));doc.setFontSize(9);doc.text(safe(balanceText(row.confirmed)),56,y+10.5);doc.setTextColor(...ink);doc.setFont("helvetica","normal");doc.setFontSize(7.2);const currentText=openWeek?`${fmtMin(row.currentActual)} trabajadas hasta hoy${row.currentHoliday?` + ${fmtMin(row.currentHoliday)} feriado`:""}`:"Sin semana abierta",currentLines=doc.splitTextToSize(safe(currentText),50).slice(0,2);doc.text(currentLines,142,y+7.5);y+=20}doc.setFillColor(...pale);doc.roundedRect(14,y+3,182,24,2,2,"F");doc.setTextColor(...green);doc.setFont("helvetica","bold");doc.setFontSize(9);doc.text("COMO LEER ESTE RESUMEN",19,y+10);doc.setTextColor(...ink);doc.setFont("helvetica","normal");doc.setFontSize(8);doc.text("El resultado de semanas cerradas es el saldo confirmado al que deben dar importancia.",19,y+17);doc.text("La semana actual muestra solo las horas registradas hasta hoy y no genera deuda por dias futuros.",19,y+23);doc.setDrawColor(220);doc.line(14,283,196,283);doc.setTextColor(...muted);doc.setFontSize(7);doc.text(`Generado el ${new Date().toLocaleString("es-AR")} - ${state.user.email}`,14,289);doc.text("Pagina 1 de 1",196,289,{align:"right"});doc.save(`resumen-general-horas-${cutoff}.pdf`)}catch(e){toast(e.message,true)}finally{button.disabled=false;button.textContent=original}}
-async function downloadPdf(){if($("report-period").value==="summary")return downloadSummaryPdf();try{
- const d=await reportData(),individual=$("report-type").value==="individual",selected=Number($("report-employee").value),people=individual?state.mozas.filter(m=>m.id===selected):state.mozas,{jsPDF}=await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm"),doc=new jsPDF({unit:"mm",format:"a4"}),provisional=d.weeks.some(w=>w.estado==="abierta")||(!d.range&&!d.monthly&&state.week.estado==="abierta"),green=[28,76,56],gold=[201,157,78],ink=[34,36,33],muted=[105,107,101],soft=[244,243,237],pale=[235,244,238],weekIds=new Set(d.weeks.map(w=>w.id));
- const safe=s=>String(s??"").replace(/[–—]/g,"-");
- const box=(x,y,w,h,label,value,color=ink)=>{doc.setFillColor(...soft);doc.roundedRect(x,y,w,h,2,2,"F");doc.setTextColor(...muted);doc.setFont("helvetica","normal");doc.setFontSize(7.5);doc.text(label.toUpperCase(),x+3,y+5);doc.setTextColor(...color);doc.setFont("helvetica","bold");doc.setFontSize(11);doc.text(safe(value),x+3,y+12)};
- const header=(m)=>{doc.setFillColor(...green);doc.rect(0,0,210,38,"F");doc.setFillColor(255,255,255);doc.circle(17,18,7,"F");doc.setTextColor(...green);doc.setFont("helvetica","bold");doc.setFontSize(13);doc.text(m.nombre[0].toUpperCase(),17,20,{align:"center"});doc.setTextColor(255,255,255);doc.setFontSize(8);doc.text("MUNSTER - EQUIPO",29,11);doc.setFontSize(18);doc.text("CONTROL DE HORAS",29,21);doc.setFont("helvetica","normal");doc.setFontSize(9);doc.text(`${fmtDate(d.start)} al ${fmtDate(d.end)}`,29,29);doc.setDrawColor(...gold);doc.setLineWidth(1.2);doc.line(29,32,88,32);doc.setFont("helvetica","bold");doc.setFontSize(8);doc.text(provisional?"INFORME PROVISORIO":"INFORME DEFINITIVO",196,19,{align:"right"});doc.setTextColor(...ink);doc.setFontSize(17);doc.text(m.nombre,14,49)};
- const addDailyHeader=y=>{doc.setFillColor(...green);doc.rect(14,y,182,8,"F");doc.setTextColor(255,255,255);doc.setFont("helvetica","bold");doc.setFontSize(7.5);doc.text("FECHA",17,y+5.3);doc.text("ESTADO",43,y+5.3);doc.text("HORARIO",77,y+5.3);doc.text("TOTAL",143,y+5.3);doc.text("OBSERVACION",163,y+5.3);return y+8};
- const dateList=(entries)=>{if(d.monthly)return entries;const result=[];for(let x=new Date(`${d.start}T12:00:00`),last=new Date(`${d.end}T12:00:00`);x<=last;x.setDate(x.getDate()+1)){const iso=localIso(x);result.push(entries.find(e=>e.fecha===iso)||{fecha:iso,estado_dia:"sin_definir"})}return result};
- for(let personIndex=0;personIndex<people.length;personIndex++){
-  if(personIndex)doc.addPage();const m=people[personIndex],es=d.entries.filter(e=>e.moza_id===m.id),moves=d.movements.filter(x=>x.moza_id===m.id),history=d.historyMovements.filter(x=>x.moza_id===m.id),activeWeekIds=new Set(d.weeks.filter(w=>es.some(e=>e.fecha>=w.fecha_inicio&&e.fecha<=w.fecha_fin)||moves.some(x=>x.semana_id===w.id)).map(w=>w.id)),expectedTotal=d.expectedRows.filter(x=>x.moza_id===m.id&&activeWeekIds.has(x.semana_id)).reduce((a,x)=>a+Number(x.minutos_esperados||0),0),periodCalculation=computeWeek({entries:es,movements:moves,expectedMinutes:expectedTotal}),actualTotal=periodCalculation.actualMinutes,holidayTotal=periodCalculation.holidayMinutes,computedTotal=periodCalculation.computedMinutes,returned=periodCalculation.bankUsedMinutes,compensated=moves.filter(isWeekCompensation).reduce((a,x)=>a+movementMinutes(x),0),requiredTotal=Math.max(0,periodCalculation.expectedMinutes-returned),difference=periodCalculation.resultMinutes,priorBalance=history.filter(x=>x.fecha<d.start).reduce((a,x)=>a+Number(x.minutos||0),0),confirmed=computeBalance(history),weeklyChange=confirmed-priorBalance;
-  header(m);box(14,55,34,17,"Horas base",fmtMin(expectedTotal));box(51,55,34,17,"Trabajadas",fmtMin(actualTotal));box(88,55,34,17,"Reconoc. feriado",fmtMin(holidayTotal));box(125,55,34,17,"Usadas del banco",fmtMin(returned));box(162,55,34,17,"Computadas",fmtMin(computedTotal));
-  const balanceText=v=>v>0?`${fmtMin(v)} a favor`:v<0?`${fmtMin(Math.abs(v))} pendientes de trabajar`:"0 h",resultText=difference>0?`${fmtMin(difference)} a favor`:difference<0?`${fmtMin(Math.abs(difference))} pendientes de trabajar`:"Sin diferencia",periodValue=provisional?difference:weeklyChange,displayedFinal=provisional?priorBalance+periodValue:confirmed,periodResultText=d.range?balanceText(periodValue):resultText,periodComponents=d.range?d.weeks.map(w=>moves.filter(x=>x.semana_id===w.id).reduce((a,x)=>a+Number(x.minutos||0),0)):[periodValue],favorTotal=Math.max(0,priorBalance)+periodComponents.filter(v=>v>0).reduce((a,v)=>a+v,0),pendingTotal=Math.abs(Math.min(0,priorBalance))+periodComponents.filter(v=>v<0).reduce((a,v)=>a+Math.abs(v),0),priorLabel=priorBalance>0?"HORAS A FAVOR ACUMULADAS DE SEMANAS ANTERIORES":priorBalance<0?"HORAS PENDIENTES DE TRABAJAR DE SEMANAS ANTERIORES":"SALDO ACUMULADO DE SEMANAS ANTERIORES",periodLabel=d.range?"RESULTADO DEL PERIODO SELECCIONADO":provisional?"RESULTADO PROVISORIO DE ESTA SEMANA":"RESULTADO DE ESTA SEMANA",compensatedBalance=priorBalance*periodValue<0?Math.min(Math.abs(priorBalance),Math.abs(periodValue)):0;let equation;if(!favorTotal&&!pendingTotal)equation="0 h = 0 h";else if(!favorTotal)equation=`${fmtMin(pendingTotal)} pendientes = ${balanceText(displayedFinal)}`;else if(!pendingTotal)equation=`${fmtMin(favorTotal)} a favor = ${balanceText(displayedFinal)}`;else equation=pendingTotal>=favorTotal?`${fmtMin(pendingTotal)} pendientes - ${fmtMin(favorTotal)} a favor = ${balanceText(displayedFinal)}`:`${fmtMin(favorTotal)} a favor - ${fmtMin(pendingTotal)} pendientes = ${balanceText(displayedFinal)}`;let movementExplanation;if(!periodValue)movementExplanation="El saldo anterior no cambió durante este período.";else if(!priorBalance)movementExplanation=periodValue>0?`Se incorporaron ${fmtMin(periodValue)} a favor al saldo.`:`Se incorporaron ${fmtMin(Math.abs(periodValue))} pendientes de trabajar al saldo.`;else if(compensatedBalance)movementExplanation=periodValue>0?`${fmtMin(compensatedBalance)} a favor compensaron horas pendientes anteriores.`:`${fmtMin(compensatedBalance)} pendientes se descontaron de las horas a favor anteriores.`;else movementExplanation=periodValue>0?`Se sumaron ${fmtMin(periodValue)} a favor al saldo anterior.`:`Se sumaron ${fmtMin(Math.abs(periodValue))} pendientes de trabajar al saldo anterior.`;
-  doc.setFillColor(...soft);doc.roundedRect(14,76,182,52,2,2,"F");doc.setTextColor(...green);doc.setFont("helvetica","bold");doc.setFontSize(9);doc.text("MOVIMIENTO Y CUENTA FINAL DEL SALDO",18,82);doc.setFontSize(7.3);doc.setTextColor(...ink);doc.text(priorLabel,18,88);doc.text(safe(balanceText(priorBalance)),192,88,{align:"right"});doc.text(periodLabel,18,94);doc.text(safe(periodResultText),192,94,{align:"right"});doc.setFont("helvetica","normal");doc.setTextColor(...muted);doc.setFontSize(7.3);doc.text("QUE OCURRIO:",18,100);doc.text(safe(movementExplanation),43,100);doc.setFillColor(255,255,255);doc.roundedRect(18,104,174,10,1.5,1.5,"F");doc.setTextColor(...ink);doc.setFont("helvetica","bold");doc.setFontSize(doc.getTextWidth(safe(equation))>168?7.5:9.5);doc.text(safe(equation),105,110.5,{align:"center"});doc.setFillColor(...(displayedFinal>=0?green:[151,63,54]));doc.roundedRect(16,117,178,9,1.5,1.5,"F");doc.setTextColor(255,255,255);doc.setFontSize(8.5);doc.text("SALDO ACTUAL ACUMULADO",19,123);doc.text(safe(balanceText(displayedFinal)),191,123,{align:"right"});
-  let y=145;if(!d.range){doc.setTextColor(...green);doc.setFont("helvetica","bold");doc.setFontSize(11);doc.text("DETALLE DIARIO",14,141);y=addDailyHeader(y);
-  for(const e of dateList(es)){const works=isWorkStatus(e.estado_dia),plannedHoliday=e.estado_dia==="feriado_parcial"&&e.entrada_1?.slice(0,5)==="00:00"&&e.salida_1?.slice(0,5)==="00:00"&&actualEntryMinutes(e)===0,pending=works&&(!e.salida_1||(e.entrada_2&&!e.salida_2)),status=e.estado_dia==="feriado_parcial"?"FERIADO PARCIAL":e.estado_dia==="sin_definir"?"SIN DEFINIR":works?(pending?"PENDIENTE":"TRABAJO"):dayLabel(e.estado_dia).toUpperCase(),schedule=plannedHoliday?"-":works&&e.entrada_1?(pending?`${e.entrada_1.slice(0,5)} - salida pendiente`:`${e.entrada_1.slice(0,5)}-${e.salida_1.slice(0,5)}${e.entrada_2&&e.salida_2?` / ${e.entrada_2.slice(0,5)}-${e.salida_2.slice(0,5)}`:""}`):"-",note=safe(e.observacion||"-"),noteLines=doc.splitTextToSize(note,31).slice(0,1),rowH=8;doc.setFillColor(y%2?250:247,249,247);doc.rect(14,y,182,rowH,"F");doc.setTextColor(...ink);doc.setFont("helvetica","normal");doc.setFontSize(7.5);doc.text(fmtDate(e.fecha),17,y+5.2);doc.setFont("helvetica","bold");doc.text(status,43,y+5.2);doc.setFont("helvetica","normal");doc.text(safe(schedule),77,y+5.2);doc.text(works&&e.minutos_trabajados?fmtMin(e.minutos_trabajados):e.estado_dia==="feriado_completo"?"8 h":e.estado_dia==="feriado_parcial"?fmtMin(creditedEntryMinutes(e)):"-",143,y+5.2);doc.text(noteLines,163,y+5.2);y+=rowH}
-  doc.setFillColor(...pale);doc.rect(14,y,182,10,"F");doc.setTextColor(...green);doc.setFont("helvetica","bold");doc.setFontSize(8);doc.text("TOTALES",17,y+6.3);doc.text(fmtMin(actualTotal),143,y+6.3);y+=12}else{doc.setTextColor(...green);doc.setFont("helvetica","bold");doc.setFontSize(11);doc.text("CUENTA DE CADA SEMANA",14,141);y=145;doc.setFillColor(...green);doc.rect(14,y,182,8,"F");doc.setTextColor(255,255,255);doc.setFontSize(7.5);doc.text("SEMANA",18,y+5.3);doc.text("COMO SE CALCULO EL RESULTADO",61,y+5.3);y+=8;let weekRows=d.weeks.map(w=>{const wes=es.filter(e=>e.fecha>=w.fecha_inicio&&e.fecha<=w.fecha_fin),wm=moves.filter(x=>x.semana_id===w.id),base=d.expectedRows.find(x=>x.moza_id===m.id&&x.semana_id===w.id)?.minutos_esperados||0,calculation=computeWeek({entries:wes,movements:wm,expectedMinutes:base}),actual=calculation.actualMinutes,holiday=calculation.holidayMinutes,bank=calculation.bankUsedMinutes,value=wm.reduce((a,x)=>a+Number(x.minutos||0),0),raw=calculation.resultMinutes,hasActivity=calculation.hasActivity;let formula;if(raw<0)formula=`${fmtMin(calculation.expectedMinutes)} base - (${fmtMin(actual)} trabajadas + ${fmtMin(holiday)} feriado + ${fmtMin(bank)} banco) = ${fmtMin(Math.abs(raw))} pendientes`;else formula=`${fmtMin(actual)} trabajadas + ${fmtMin(holiday)} feriado + ${fmtMin(bank)} banco - ${fmtMin(calculation.expectedMinutes)} base = ${fmtMin(raw)} a favor`;return{label:`${fmtDate(w.fecha_inicio)} al ${fmtDate(w.fecha_fin)}`,value,formula,hasActivity}}).filter(x=>x.hasActivity);if(weekRows.length>15){const hidden=weekRows.length-14;weekRows=[{label:`Primeras ${hidden} semanas`,value:weekRows.slice(0,hidden).reduce((a,x)=>a+x.value,0),formula:"Agrupadas para mantener una sola hoja",hasActivity:true},...weekRows.slice(-14)]}for(const row of weekRows){doc.setFillColor(y%2?250:247,249,247);doc.rect(14,y,182,8,"F");doc.setTextColor(...ink);doc.setFont("helvetica","normal");doc.setFontSize(6.5);doc.text(safe(row.label),18,y+5.2);doc.setFont("helvetica","bold");doc.text(safe(row.formula),61,y+5.2);y+=8}doc.setFillColor(...pale);doc.rect(14,y,182,9,"F");doc.setTextColor(...green);doc.setFont("helvetica","bold");doc.setFontSize(8);doc.text("RESULTADO ACUMULADO DEL PERIODO",18,y+5.8);doc.text(safe(balanceText(periodValue)),192,y+5.8,{align:"right"});y+=12}
- }
- const pages=doc.getNumberOfPages();for(let i=1;i<=pages;i++){doc.setPage(i);doc.setDrawColor(220);doc.line(14,283,196,283);doc.setTextColor(...muted);doc.setFont("helvetica","normal");doc.setFontSize(7);doc.text(`Generado el ${new Date().toLocaleString("es-AR")} - ${state.user.email}`,14,289);doc.text(`Pagina ${i} de ${pages}`,196,289,{align:"right"})}
- doc.save(`informe-horas-${d.start}-${d.end}${individual?`-${people[0].nombre}`:"-general"}.pdf`)
- }catch(e){toast(e.message,true)}}$("download-pdf").onclick=downloadPdf;
-async function previewDelete(){const month=$("delete-month").value;if(!month)return toast("Elegí un mes",true);if(month>=today().slice(0,7))return toast("Solo se pueden eliminar meses anteriores",true);const start=`${month}-01`,end=`${month}-${new Date(Number(month.slice(0,4)),Number(month.slice(5,7)),0).getDate()}`,[weeks,entries]=await Promise.all([supabase.from("semanas").select("*").gte("fecha_inicio",start).lte("fecha_inicio",end),supabase.from("registros_horarios").select("id",{count:"exact"}).gte("fecha",start).lte("fecha",end)]);if(weeks.error||entries.error)return toast((weeks.error||entries.error).message,true);if(weeks.data.some(w=>w.estado==="abierta"))return toast("El mes contiene semanas abiertas",true);const box=$("delete-preview");box.classList.remove("hidden");box.innerHTML=`<div class="delete-summary"><strong>Se eliminarán ${entries.count||0} registros y ${weeks.data.length} semanas.</strong><p>Los saldos pendientes se trasladarán automáticamente.</p><label>Para confirmar escribí ELIMINAR ${month}<input id="delete-confirm" autocomplete="off"></label><button id="delete-final" class="danger-button">Eliminar definitivamente</button></div>`;$("delete-final").onclick=()=>deleteMonth(month,start,end,weeks.data)}$("preview-delete").onclick=previewDelete;
-async function deleteMonth(month,start,end,weeks){if($("delete-confirm").value!==`ELIMINAR ${month}`)return toast("La confirmación no coincide",true);if(!confirm("Esta eliminación es definitiva. ¿Continuar?"))return;const nextDate=localIso(new Date(Number(month.slice(0,4)),Number(month.slice(5,7)),1)),weekIds=weeks.map(w=>w.id),balances=[];for(const m of state.mozas){const{data,error}=await supabase.from("movimientos_horas").select("minutos").eq("moza_id",m.id).gte("fecha",start).lte("fecha",end);if(error)return toast(error.message,true);const amount=data.reduce((a,x)=>a+x.minutos,0);if(amount)balances.push({moza_id:m.id,semana_id:null,fecha:nextDate,minutos:amount,tipo:"ajuste",modalidad:"Saldo trasladado",observacion:`Saldo trasladado al eliminar ${month}`,cargado_por:state.user.id})}let result=await supabase.from("movimientos_horas").delete().gte("fecha",start).lte("fecha",end);if(result.error)return toast(result.error.message,true);result=await supabase.from("registros_horarios").delete().gte("fecha",start).lte("fecha",end);if(result.error)return toast(result.error.message,true);if(weekIds.length){result=await supabase.from("horas_esperadas").delete().in("semana_id",weekIds);if(!result.error)result=await supabase.from("semanas").delete().in("id",weekIds);if(result.error)return toast(result.error.message,true)}if(balances.length){result=await supabase.from("movimientos_horas").insert(balances);if(result.error)return toast(result.error.message,true)}$("delete-preview").classList.add("hidden");await load();toast("Mes eliminado y saldos trasladados")}
-if(configured){const{data}=await supabase.auth.getSession();if(data.session){state.user=data.session.user;try{await load()}catch(e){showLogin(e.message)}}else showLogin()}else showLogin();
+function setTime(key, value) {
+  const [h, m] = (value || "00:00").split(":");
+  $(key + "-hour").value = h;
+  $(key + "-minute").value = m;
+}
+function getTime(key) {
+  return `${$(key + "-hour").value}:${$(key + "-minute").value}`;
+}
+function currentTime() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+const weekDates = (reference = new Date()) => {
+  const d = new Date(reference),
+    start = new Date(d),
+    daysSinceMonday = (d.getDay() + 6) % 7;
+  start.setDate(d.getDate() - daysSinceMonday);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return [localIso(start), localIso(end)];
+};
+const currentWeekStart = () => weekDates()[0];
+const shiftDate = (iso, days) => {
+  const d = new Date(`${iso}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return localIso(d);
+};
+let state = {
+  user: null,
+  mozas: [],
+  week: null,
+  expected: [],
+  entries: [],
+  movements: [],
+  viewDate: today(),
+  selectedWeekStart: currentWeekStart(),
+};
+function toast(message, error = false) {
+  const t = $("toast");
+  t.textContent = message;
+  t.className = `toast ${error ? "bad" : ""}`;
+  setTimeout(() => t.classList.add("hidden"), 2400);
+}
+function showLogin(message = "") {
+  $("login").classList.remove("hidden");
+  $("app").classList.add("hidden");
+  $("login-error").textContent = message;
+  if (!configured)
+    $("login-error").textContent =
+      "Falta conectar la clave publicable de Supabase.";
+}
+function showApp() {
+  $("login").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  document.body.classList.toggle("simple-mode", simpleMode);
+  $("user-letter").textContent = (state.user.email || "N")[0].toUpperCase();
+  if (state.week) {
+    const isCurrent = state.week.fecha_inicio === currentWeekStart();
+    $("week-kicker").textContent = isCurrent
+      ? "SEMANA ACTUAL"
+      : "SEMANA SELECCIONADA";
+    $("next-week").disabled = isCurrent;
+    $("current-week").disabled = isCurrent;
+  }
+}
+async function load() {
+  const start = state.selectedWeekStart,
+    end = shiftDate(start, 6),
+    isCurrent = start === currentWeekStart();
+  let { data: week, error } = await supabase
+    .from("semanas")
+    .select("*")
+    .eq("fecha_inicio", start)
+    .maybeSingle();
+  if (error) throw error;
+  if (!week && !isCurrent) {
+    state.selectedWeekStart = currentWeekStart();
+    state.viewDate = today();
+    toast("Esa semana todavía no existe", true);
+    return load();
+  }
+  if (!week) {
+    ({ data: week, error } = await supabase
+      .from("semanas")
+      .insert({ fecha_inicio: start, fecha_fin: end })
+      .select()
+      .single());
+    if (error) throw error;
+    const { data: people, error: peopleError } = await supabase
+      .from("mozas")
+      .select("id")
+      .eq("activa", true);
+    if (peopleError) throw peopleError;
+    const { error: defaultsError } = await supabase
+      .from("horas_esperadas")
+      .insert(
+        people.map((m) => ({
+          semana_id: week.id,
+          moza_id: m.id,
+          minutos_esperados: 2400,
+          cantidad_francos: 2,
+        })),
+      );
+    if (defaultsError) throw defaultsError;
+  }
+  state.week = week;
+  if (state.viewDate < start || state.viewDate > end)
+    state.viewDate = isCurrent ? today() : start;
+  const [m, e, r, mv] = await Promise.all([
+    supabase.from("mozas").select("*").eq("activa", true).order("id"),
+    supabase.from("horas_esperadas").select("*").eq("semana_id", week.id),
+    supabase
+      .from("registros_horarios")
+      .select("*")
+      .gte("fecha", start)
+      .lte("fecha", end),
+    supabase.from("movimientos_horas").select("*").order("fecha"),
+  ]);
+  for (const x of [m, e, r, mv]) if (x.error) throw x.error;
+  state.mozas = m.data;
+  state.expected = e.data;
+  state.entries = r.data;
+  state.movements = mv.data;
+  render();
+}
+function expected(id) {
+  return (
+    state.expected.find((x) => x.moza_id === id)?.minutos_esperados ?? 2400
+  );
+}
+const isWorkStatus = (s) => s === "trabajo" || s === "feriado_parcial" || !s;
+const dayLabel = (s) =>
+  ({
+    trabajo: "Trabajó",
+    franco: "Franco",
+    ausente: "Ausente",
+    licencia: "Licencia",
+    vacaciones: "Vacaciones",
+    feriado_completo: "Feriado completo",
+    feriado_parcial: "Feriado parcial",
+    sin_definir: "Sin definir",
+  })[s] || s;
+const actualEntryMinutes = (e) => Number(e?.minutos_trabajados) || 0;
+const creditedEntryMinutes = (e) =>
+  e?.estado_dia === "feriado_completo"
+    ? 480
+    : e?.estado_dia === "feriado_parcial"
+      ? Math.max(480, actualEntryMinutes(e))
+      : actualEntryMinutes(e);
+const holidayRecognitionEntry = (e) =>
+  Math.max(0, creditedEntryMinutes(e) - actualEntryMinutes(e));
+function weekCalculation(
+  id,
+  entries = state.entries,
+  movements = state.movements,
+  expectedMinutes = expected(id),
+) {
+  return computeWeek({
+    entries: entries.filter((x) => x.moza_id === id),
+    movements: movements.filter(
+      (x) => x.moza_id === id && (!state.week || x.semana_id === state.week.id),
+    ),
+    expectedMinutes,
+  });
+}
+function actualWorked(id, entries = state.entries) {
+  return weekCalculation(id, entries).actualMinutes;
+}
+function holidayRecognition(id, entries = state.entries) {
+  return weekCalculation(id, entries).holidayMinutes;
+}
+function worked(id) {
+  return weekCalculation(id).computedMinutes;
+}
+function balance(id) {
+  return computeBalance(state.movements.filter((x) => x.moza_id === id));
+}
+const specialCreditLabel = "Crédito especial semanal",
+  specialUseLabel = "Uso automático del crédito especial",
+  specialExpiryLabel = "Vencimiento del crédito especial";
+function specialCreditMovements(id) {
+  return state.movements.filter(
+    (x) =>
+      x.moza_id === id &&
+      x.semana_id === state.week.id &&
+      [specialCreditLabel, specialUseLabel, specialExpiryLabel].includes(
+        x.modalidad,
+      ),
+  );
+}
+function specialCreditGranted(id) {
+  return specialCreditMovements(id)
+    .filter((x) => x.modalidad === specialCreditLabel)
+    .reduce((a, x) => a + Math.max(0, Number(x.minutos) || 0), 0);
+}
+function specialCreditConsumed(id) {
+  return specialCreditMovements(id)
+    .filter((x) => x.modalidad === specialUseLabel)
+    .reduce((a, x) => a + Math.abs(Number(x.minutos) || 0), 0);
+}
+function specialCreditExpired(id) {
+  return specialCreditMovements(id)
+    .filter((x) => x.modalidad === specialExpiryLabel)
+    .reduce((a, x) => a + Math.abs(Number(x.minutos) || 0), 0);
+}
+function specialCreditAvailable(id) {
+  return Math.max(
+    0,
+    specialCreditGranted(id) -
+      specialCreditConsumed(id) -
+      specialCreditExpired(id),
+  );
+}
+function movementMinutes(x) {
+  return Number(x.minutos_referencia) || Math.abs(Number(x.minutos) || 0);
+}
+function weekMovements(id, type) {
+  return state.movements.filter(
+    (x) => x.moza_id === id && x.semana_id === state.week.id && x.tipo === type,
+  );
+}
+function bankUsed(id) {
+  return weekCalculation(id).bankUsedMinutes;
+}
+function isWeekCompensation(x) {
+  return (
+    x.tipo === "ajuste" && Number(x.minutos) === 0 && movementMinutes(x) > 0
+  );
+}
+function weekCompensated(id) {
+  return state.movements
+    .filter(
+      (x) =>
+        x.moza_id === id &&
+        x.semana_id === state.week.id &&
+        isWeekCompensation(x),
+    )
+    .reduce((a, x) => a + movementMinutes(x), 0);
+}
+function required(id) {
+  const calculation = weekCalculation(id);
+  return Math.max(0, calculation.expectedMinutes - calculation.bankUsedMinutes);
+}
+const reviewToken = (e) => `Revisión registro #${e.id}:`;
+function isReviewed(e) {
+  return state.movements.some((x) =>
+    String(x.observacion || "").startsWith(reviewToken(e)),
+  );
+}
+function pendingReviews() {
+  return simpleMode
+    ? []
+    : state.entries.filter(
+        (e) =>
+          e.estado_dia === "trabajo" &&
+          e.estado_marcacion === "finalizada" &&
+          actualEntryMinutes(e) < 480 &&
+          !isReviewed(e),
+      );
+}
+function plannedPartialHoliday(e) {
+  return (
+    e?.estado_dia === "feriado_parcial" &&
+    e?.entrada_1?.slice(0, 5) === "00:00" &&
+    e?.salida_1?.slice(0, 5) === "00:00" &&
+    actualEntryMinutes(e) === 0
+  );
+}
+function entryIsOpen(e) {
+  return Boolean(
+    e &&
+      isWorkStatus(e.estado_dia) &&
+      !plannedPartialHoliday(e) &&
+      (!e.salida_1 ||
+        (e.entrada_2 && !e.salida_2) ||
+        (e.estado_marcacion && e.estado_marcacion !== "finalizada")),
+  );
+}
+function previousWeekDates() {
+  const dates = [],
+    limit = today() < state.week.fecha_fin ? today() : state.week.fecha_fin;
+  for (
+    let d = new Date(`${state.week.fecha_inicio}T12:00:00`);
+    localIso(d) < limit;
+    d.setDate(d.getDate() + 1)
+  )
+    dates.push(localIso(d));
+  return dates;
+}
+function missingDays() {
+  const dates = previousWeekDates(),
+    existing = new Set(state.entries.map((e) => `${e.moza_id}|${e.fecha}`)),
+    rows = [];
+  for (const date of dates)
+    for (const m of state.mozas)
+      if (!existing.has(`${m.id}|${date}`)) rows.push({ moza: m, date });
+  return rows;
+}
+function renderInformation() {
+  const missing = missingDays(),
+    open = state.entries.filter(entryIsOpen),
+    reviews = pendingReviews(),
+    total = missing.length + open.length + reviews.length;
+  const badge = $("information-badge");
+  badge.textContent = total;
+  badge.classList.toggle("hidden", !total);
+  $("information-total").textContent = total
+    ? `${total} pendiente${total === 1 ? "" : "s"}`
+    : "Todo al día";
+  $("information-ok").classList.toggle("hidden", Boolean(total));
+  $("missing-days-section").classList.toggle("hidden", !missing.length);
+  $("missing-days-count").textContent = missing.length;
+  $("missing-days-list").innerHTML = missing
+    .map(
+      (x) =>
+        `<article class="information-card missing"><div class="avatar small">${x.moza.nombre[0]}</div><div><h4>${x.moza.nombre} no tiene marcaciones</h4><p>${fmtDate(x.date)}</p><strong>¿Qué ocurrió ese día?</strong></div><button data-resolve-missing="${x.moza.id}" data-missing-date="${x.date}">Resolver</button></article>`,
+    )
+    .join("");
+  $("open-marks-section").classList.toggle("hidden", !open.length);
+  $("open-marks-count").textContent = open.length;
+  $("open-marks-list").innerHTML = open
+    .map((e) => {
+      const m = state.mozas.find((x) => x.id === e.moza_id),
+        label =
+          e.estado_marcacion === "en_corte"
+            ? "Salida al corte registrada · falta el regreso"
+            : e.estado_marcacion === "segundo_tramo"
+              ? "Segundo tramo abierto · falta la salida"
+              : "Entrada registrada · falta la salida";
+      return `<article class="information-card open"><div class="avatar small">${m?.nombre?.[0] || "?"}</div><div><h4>${m?.nombre || "Moza"}</h4><p>${fmtDate(e.fecha)}</p><strong>${label}</strong></div><button data-open-pending="${e.id}">Completar</button></article>`;
+    })
+    .join("");
+  $("short-reviews-section").classList.toggle("hidden", !reviews.length);
+  $("short-reviews-count").textContent = reviews.length;
+  $("short-reviews-list").innerHTML = reviews
+    .map((e) => {
+      const m = state.mozas.find((x) => x.id === e.moza_id);
+      return `<article class="information-card review"><div class="avatar small">${m?.nombre?.[0] || "?"}</div><div><h4>${m?.nombre || "Moza"}</h4><p>${fmtDate(e.fecha)} · ${fmtMin(actualEntryMinutes(e))} trabajadas</p><strong>${simpleMode ? "Se calculará automáticamente al cerrar" : `${fmtMin(480 - actualEntryMinutes(e))} por revisar`}</strong></div>${simpleMode ? `<button data-correct-entry="${e.id}">Corregir horario</button>` : `<button data-review="${e.id}">Revisar</button>`}</article>`;
+    })
+    .join("");
+}
+function render() {
+  showApp();
+  $("week-label").textContent =
+    `${fmtDate(state.week.fecha_inicio)} al ${fmtDate(state.week.fecha_fin)}`;
+  $("week-status").textContent = state.week.estado.toUpperCase();
+  $("view-date").value = state.viewDate;
+  $("today-label").textContent =
+    `${state.viewDate === today() ? "HOY" : "FECHA"} · ${fmtDate(state.viewDate)}`;
+  const todays = state.entries.filter((x) => x.fecha === state.viewDate);
+  $("daily-count").textContent =
+    `${todays.length} de ${state.mozas.length} definidas`;
+  $("daily-list").innerHTML = state.mozas
+    .map((m) => {
+      const e = todays.find((x) => x.moza_id === m.id),
+        workedDay = isWorkStatus(e?.estado_dia),
+        plannedHoliday =
+          e?.estado_dia === "feriado_parcial" &&
+          e?.entrada_1?.slice(0, 5) === "00:00" &&
+          e?.salida_1?.slice(0, 5) === "00:00" &&
+          actualEntryMinutes(e) === 0,
+        pending = Boolean(
+          workedDay &&
+            e &&
+            !plannedHoliday &&
+            (!e.salida_1 ||
+              (e.entrada_2 && !e.salida_2) ||
+              (e.estado_marcacion && e.estado_marcacion !== "finalizada")),
+        ),
+        markState =
+          e?.estado_marcacion === "finalizada" && !e.salida_1
+            ? "trabajando"
+            : e?.estado_marcacion,
+        pendingText =
+          markState === "en_corte"
+            ? "En corte · regreso pendiente"
+            : markState === "segundo_tramo"
+              ? "Segundo tramo · salida pendiente"
+              : "Salida pendiente",
+        schedule = e
+          ? markState === "en_corte" && e.salida_1
+            ? `${e.entrada_1.slice(0, 5)}–${e.salida_1.slice(0, 5)}`
+            : markState === "segundo_tramo" && e.salida_1 && e.entrada_2
+              ? `${e.entrada_1.slice(0, 5)}–${e.salida_1.slice(0, 5)} / ${e.entrada_2.slice(0, 5)}`
+              : e.entrada_1?.slice(0, 5) || ""
+          : "",
+        completed =
+          e && e.salida_1
+            ? `${e.entrada_1?.slice(0, 5) || "--:--"}–${e.salida_1.slice(0, 5)}${e.entrada_2 && e.salida_2 ? ` / ${e.entrada_2.slice(0, 5)}–${e.salida_2.slice(0, 5)}` : ""}`
+            : "Salida pendiente",
+        holidayLine =
+          e?.estado_dia === "feriado_parcial"
+            ? `<strong>Feriado parcial${plannedHoliday ? " · horario pendiente" : ` · ${fmtMin(creditedEntryMinutes(e))} computadas`}</strong>`
+            : "";
+      return `<article class="employee-card ${pending ? "open-shift" : ""}"><div class="avatar">${m.nombre[0]}</div><div class="employee-info"><h4>${m.nombre}</h4>${e ? (workedDay ? (plannedHoliday ? `<p>Feriado parcial programado</p>${holidayLine}` : pending ? `<p>${schedule} · <span class="open-label"><i class="open-dot"></i>${pendingText}</span></p>${e.minutos_trabajados ? `<strong>${fmtMin(e.minutos_trabajados)} parciales</strong>` : ""}${holidayLine}` : `<p>${completed}</p><strong>${fmtMin(e.minutos_trabajados)} trabajadas</strong>${holidayLine}`) : `<p class="day-state">${dayLabel(e.estado_dia)}${e.estado_dia === "feriado_completo" ? " · 8 h computadas" : ""}</p>`) : `<p class="muted">Sin definir</p>`}</div><button class="edit-btn ${e ? "done" : ""}" data-entry="${m.id}">${pending ? "Revisar" : e ? "Editar" : "Cargar"}</button></article>`;
+    })
+    .join("");
+  $("weekly-list").innerHTML = state.mozas
+    .map((m) => {
+      const calculation = weekCalculation(m.id),
+        base = expected(m.id),
+        used = calculation.bankUsedMinutes,
+        comp = weekCompensated(m.id),
+        holiday = calculation.holidayMinutes,
+        toDo = Math.max(0, calculation.expectedMinutes - used),
+        diff = calculation.resultMinutes,
+        open = state.week.estado === "abierta",
+        label = open
+          ? diff < 0
+            ? "Restan registrar"
+            : "Excedente provisorio"
+          : diff > 0
+            ? "Horas extra"
+            : diff < 0
+              ? "Horas faltantes"
+              : "Diferencia",
+        display =
+          open && diff < 0 ? fmtMin(Math.abs(diff)) : fmtMin(diff, true),
+        options = [0, 8, 16, 24, 32, 40, 48]
+          .map(
+            (h) =>
+              `<option value="${h * 60}" ${base === h * 60 ? "selected" : ""}>${h} h${h === 0 ? " · Vacaciones" : h === 40 ? " · 2 francos" : h === 48 ? " · 1 franco" : ""}</option>`,
+          )
+          .join(""),
+        adjustment =
+          used || comp || holiday
+            ? `<div class="summary-adjustment"><span>Trabajadas realmente:<strong>${fmtMin(calculation.actualMinutes)}</strong></span>${holiday ? `<span>Reconocidas por feriado:<strong>${fmtMin(holiday)}</strong></span>` : ""}${comp ? `<span>Compensadas esta semana:<strong>${fmtMin(comp)}</strong></span>` : ""}${used ? `<span>Usadas del banco:<strong>${fmtMin(used)}</strong></span>` : ""}<span>A cumplir:<strong>${fmtMin(toDo)}</strong></span></div>`
+            : "";
+      return `<article class="summary-row"><div class="avatar small">${m.nombre[0]}</div><div class="summary-name"><h4>${m.nombre}</h4><p>${calculation.definedDays} días definidos</p></div><label>Horas base<select data-expected="${m.id}" ${state.week.estado === "cerrada" ? "disabled" : ""}>${options}</select></label><div class="metric"><span>Horas computadas</span><strong>${fmtMin(calculation.computedMinutes)}</strong></div><div class="difference ${!open && diff > 0 ? "positive" : !open && diff < 0 ? "negative" : ""}"><span>${label}</span><strong>${display}</strong></div>${adjustment}</article>`;
+    })
+    .join("");
+  const reviews = pendingReviews(),
+    reviewOpen = state.week.estado === "abierta";
+  $("review-section").classList.toggle(
+    "hidden",
+    !reviewOpen || !reviews.length,
+  );
+  $("review-count").textContent =
+    `${reviews.length} pendiente${reviews.length === 1 ? "" : "s"}`;
+  $("review-list").innerHTML = reviews
+    .map((e) => {
+      const m = state.mozas.find((x) => x.id === e.moza_id),
+        deficit = 480 - actualEntryMinutes(e),
+        schedule = `${e.entrada_1?.slice(0, 5) || "--:--"}–${e.salida_1?.slice(0, 5) || "--:--"}${e.entrada_2 && e.salida_2 ? ` / ${e.entrada_2.slice(0, 5)}–${e.salida_2.slice(0, 5)}` : ""}`;
+      return `<article class="review-card"><div class="avatar small">${m?.nombre?.[0] || "?"}</div><div><h4>${m?.nombre || "Moza"}</h4><p>${fmtDate(e.fecha)} · ${schedule} · ${fmtMin(actualEntryMinutes(e))} trabajadas</p><strong>Faltan revisar ${fmtMin(deficit)}</strong></div><button data-review="${e.id}">Revisar</button></article>`;
+    })
+    .join("");
+  $("close-week").disabled = state.week.estado === "cerrada";
+  $("close-week").textContent =
+    state.week.estado === "cerrada"
+      ? "✓ Semana cerrada"
+      : "Cerrar semana y confirmar diferencias";
+  $("balance-list").innerHTML = state.mozas
+    .map((m) => {
+      const calculation = weekCalculation(m.id),
+        confirmed = balance(m.id),
+        used = calculation.bankUsedMinutes,
+        comp = weekCompensated(m.id),
+        current =
+          state.week.estado === "abierta" ? calculation.resultMinutes : 0,
+        hasProvisional = current > 0,
+        status =
+          confirmed > 0
+            ? "HORAS A FAVOR"
+            : confirmed < 0
+              ? "PENDIENTES DE TRABAJAR"
+              : hasProvisional
+                ? "PROVISORIO"
+                : state.week.estado === "abierta"
+                  ? "SEMANA ABIERTA"
+                  : "AL DÍA",
+        confirmedText =
+          confirmed > 0
+            ? `${fmtMin(confirmed)} a favor acumuladas`
+            : confirmed < 0
+              ? `${fmtMin(Math.abs(confirmed))} pendientes de trabajar acumuladas`
+              : "0 h",
+        weekLine =
+          state.week.estado === "abierta"
+            ? `<div class="week-preview ${current > 0 ? "plus" : ""}"><span>Resultado provisorio de esta semana</span><strong>${current > 0 ? `+${fmtMin(current)} a favor` : current < 0 ? `${fmtMin(Math.abs(current))} pendientes de trabajar` : "Sin diferencia"}</strong>${current > 0 ? "<small>Se incorporará al saldo cuando cierren la semana</small>" : ""}</div>`
+            : "",
+        currentMoves = state.movements.filter(
+          (x) =>
+            x.moza_id === m.id &&
+            x.semana_id === state.week.id &&
+            (x.tipo === "devolucion" || isWeekCompensation(x)),
+        ),
+        moveList = currentMoves.length
+          ? `<details class="movement-history"><summary>Ver ${currentMoves.length} movimiento${currentMoves.length === 1 ? "" : "s"} de esta semana</summary>${currentMoves.map((x) => `<div><span><b>${x.tipo === "devolucion" ? "Uso de horas acumuladas" : "Compensación"}</b> · ${fmtDate(x.fecha)} · ${fmtMin(movementMinutes(x))}<small>${x.modalidad || ""}${x.observacion ? ` · ${x.observacion.replace(/^Compensación semanal:\s*/, "")}` : ""}</small></span>${state.week.estado === "abierta" ? `<button data-delete-movement="${x.id}" title="Eliminar movimiento">×</button>` : ""}</div>`).join("")}</details>`
+          : "";
+      return `<article class="balance-card ${confirmed === 0 && !hasProvisional ? "settled" : ""} ${hasProvisional ? "provisional-card" : ""}"><div class="balance-top"><div class="avatar">${m.nombre[0]}</div><span class="status">${status}</span></div><h4>${m.nombre}</h4><span class="confirmed-label">Saldo acumulado de semanas cerradas</span><strong>${confirmedText}</strong><div class="balance-breakdown"><div><span>Compensadas esta semana</span><strong>${fmtMin(comp)}</strong></div><div><span>Horas acumuladas utilizadas</span><strong>${fmtMin(used)}</strong></div></div>${weekLine}<button class="balance-action" data-return="${m.id}" ${state.week.estado === "cerrada" ? "disabled" : ""}>Registrar compensación o uso</button>${moveList}</article>`;
+    })
+    .join("");
+  $("report-employee").innerHTML = state.mozas
+    .map((m) => `<option value="${m.id}">${m.nombre}</option>`)
+    .join("");
+  $("pin-list").innerHTML = state.mozas
+    .map(
+      (m) =>
+        `<div class="pin-person"><span>${m.nombre}</span><button type="button" data-pin="${m.id}">Crear o cambiar PIN</button></div>`,
+    )
+    .join("");
+  if (!$("report-month").value) $("report-month").value = today().slice(0, 7);
+  if (!$("delete-month").value) {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    $("delete-month").value = localIso(d).slice(0, 7);
+  }
+  renderInformation();
+  bindDynamic();
+}
+function bindDynamic() {
+  document
+    .querySelectorAll("[data-entry]")
+    .forEach((b) => (b.onclick = () => openEntry(Number(b.dataset.entry))));
+  document
+    .querySelectorAll("[data-return]")
+    .forEach((b) => (b.onclick = () => openReturn(Number(b.dataset.return))));
+  document
+    .querySelectorAll("[data-review]")
+    .forEach((b) => (b.onclick = () => openReview(Number(b.dataset.review))));
+  document
+    .querySelectorAll("[data-resolve-missing]")
+    .forEach(
+      (b) =>
+        (b.onclick = () =>
+          openMissingDay(
+            Number(b.dataset.resolveMissing),
+            b.dataset.missingDate,
+          )),
+    );
+  document
+    .querySelectorAll("[data-open-pending]")
+    .forEach(
+      (b) =>
+        (b.onclick = () => openPendingEntry(Number(b.dataset.openPending))),
+    );
+  document
+    .querySelectorAll("[data-delete-movement]")
+    .forEach(
+      (b) =>
+        (b.onclick = () => deleteMovement(Number(b.dataset.deleteMovement))),
+    );
+  document
+    .querySelectorAll("[data-expected]")
+    .forEach(
+      (s) =>
+        (s.onchange = () =>
+          saveExpected(Number(s.dataset.expected), Number(s.value))),
+    );
+  document
+    .querySelectorAll("[data-pin]")
+    .forEach((b) => (b.onclick = () => openPinAdmin(Number(b.dataset.pin))));
+}
+async function deleteMovement(id) {
+  if (!confirm("¿Eliminar esta compensación o uso de horas?")) return;
+  const { error } = await supabase
+    .from("movimientos_horas")
+    .delete()
+    .eq("id", id);
+  if (error) return toast(error.message, true);
+  await load();
+  toast("Movimiento eliminado");
+}
+function openEntry(id) {
+  const m = state.mozas.find((x) => x.id === id),
+    e = state.entries.find(
+      (x) => x.moza_id === id && x.fecha === state.viewDate,
+    ),
+    status = e?.estado_dia || "trabajo",
+    workLike = isWorkStatus(status),
+    plannedHoliday =
+      status === "feriado_parcial" &&
+      e?.entrada_1?.slice(0, 5) === "00:00" &&
+      e?.salida_1?.slice(0, 5) === "00:00" &&
+      actualEntryMinutes(e) === 0,
+    open = Boolean(
+      e &&
+        workLike &&
+        !plannedHoliday &&
+        (!e.salida_1 ||
+          (e.entrada_2 && !e.salida_2) ||
+          (e.estado_marcacion && e.estado_marcacion !== "finalizada")),
+    );
+  $("entry-name").textContent = m.nombre;
+  $("entry-moza").value = id;
+  $("entry-date").value = e?.fecha || state.viewDate;
+  $("day-status").value = status;
+  setTime(
+    "start1",
+    plannedHoliday ? "07:00" : e?.entrada_1?.slice(0, 5) || "07:00",
+  );
+  setTime(
+    "end1",
+    plannedHoliday ? currentTime() : e?.salida_1?.slice(0, 5) || currentTime(),
+  );
+  $("split").checked = Boolean(e?.entrada_2);
+  setTime("start2", e?.entrada_2?.slice(0, 5) || "20:00");
+  setTime("end2", e?.salida_2?.slice(0, 5) || "00:00");
+  $("entry-note").value = e?.observacion || "";
+  $("work-fields").classList.toggle("hidden", !workLike);
+  $("split-fields").classList.toggle("hidden", !$("split").checked);
+  $("save-entry-only").classList.toggle("hidden", status !== "trabajo");
+  $("save-entry-only").textContent = e
+    ? "Dejar salida pendiente"
+    : "Guardar solo entrada";
+  $("schedule-holiday").classList.toggle(
+    "hidden",
+    status !== "feriado_parcial" || Boolean(e && !plannedHoliday),
+  );
+  $("save-complete").textContent = open
+    ? "Completar o corregir jornada"
+    : status === "feriado_parcial"
+      ? "Guardar feriado parcial con horario"
+      : workLike
+        ? "Guardar jornada completa"
+        : "Guardar día";
+  $("entry-dialog").showModal();
+}
+function openPendingEntry(entryId) {
+  const e = state.entries.find((x) => x.id === entryId);
+  if (!e) return;
+  state.viewDate = e.fecha;
+  render();
+  openEntry(e.moza_id);
+}
+function updateMissingDayDialog() {
+  const status = $("missing-day-status").value,
+    manual = status === "olvido" || status === "feriado_parcial",
+    pending = status === "pendiente";
+  $("missing-day-note-wrap").classList.toggle("hidden", pending);
+  $("missing-day-help").textContent = manual
+    ? "Se abrirá directamente la carga de horarios para esa fecha."
+    : pending
+      ? "El día continuará apareciendo en Información hasta que lo resuelvan."
+      : "Al confirmar, el estado quedará registrado automáticamente.";
+  $("missing-day-submit").textContent = manual
+    ? "Continuar y cargar horario"
+    : pending
+      ? "Dejar pendiente"
+      : "Registrar automáticamente";
+}
+function openMissingDay(id, date) {
+  const m = state.mozas.find((x) => x.id === id);
+  if (!m) return;
+  $("missing-day-moza").value = id;
+  $("missing-day-date").value = date;
+  $("missing-day-name").textContent = `${m.nombre} no tiene marcaciones`;
+  $("missing-day-date-label").textContent = fmtDate(date);
+  $("missing-day-status").value = "franco";
+  $("missing-day-note").value = "";
+  updateMissingDayDialog();
+  $("missing-day-dialog").showModal();
+}
+function updateMovementDialog() {
+  const bank = $("return-type").value === "devolucion";
+  $("return-help").textContent = bank
+    ? "Descuenta horas confirmadas de semanas anteriores y reduce automáticamente lo que debe cumplir esta semana."
+    : "Documenta horas hechas de más y compensadas dentro de esta misma semana. No descuenta el banco anterior.";
+  $("return-submit").textContent = bank
+    ? "Confirmar uso del banco"
+    : "Guardar compensación";
+}
+function openReturn(id) {
+  const m = state.mozas.find((x) => x.id === id);
+  $("return-name").textContent = m.nombre;
+  $("return-moza").value = id;
+  $("return-balance").textContent = fmtMin(Math.max(0, balance(id)));
+  $("return-type").value = "compensacion_semanal";
+  $("return-date").value =
+    state.viewDate >= state.week.fecha_inicio &&
+    state.viewDate <= state.week.fecha_fin
+      ? state.viewDate
+      : today();
+  $("return-hours").value = 1;
+  $("return-minutes").value = 0;
+  $("return-observation").value = "";
+  updateMovementDialog();
+  $("return-dialog").showModal();
+}
+function updateReviewDialog() {
+  const type = $("review-type").value,
+    helps = {
+      calculo_automatico:
+        "La aplicación esperará al cierre: primero compensará las horas de más y de menos de esta semana y luego usará, si hace falta, el crédito especial disponible.",
+      compensacion_semanal:
+        "Deja constancia de que estas horas se compensan con un excedente realizado durante esta misma semana.",
+      devolucion:
+        "Usa horas confirmadas del banco anterior para cubrir la diferencia de esta jornada.",
+      diferencia:
+        "No realiza ningún descuento. La diferencia quedará incluida en el resultado semanal.",
+      corregir:
+        "Abre la jornada para modificar el horario si hubo un error de marcación.",
+    };
+  $("review-help").textContent = helps[type];
+  $("review-observation-wrap").classList.toggle(
+    "hidden",
+    type === "corregir" || type === "calculo_automatico",
+  );
+  $("review-submit").textContent =
+    type === "corregir" ? "Abrir jornada" : "Confirmar revisión";
+}
+function openReview(entryId) {
+  const e = state.entries.find((x) => x.id === entryId),
+    m = state.mozas.find((x) => x.id === e?.moza_id);
+  if (!e || !m) return;
+  $("review-entry").value = e.id;
+  $("review-moza").value = m.id;
+  $("review-name").textContent = m.nombre;
+  $("review-date").textContent = fmtDate(e.fecha);
+  $("review-deficit").textContent =
+    `${fmtMin(480 - actualEntryMinutes(e))} por revisar`;
+  $("review-type").value = "calculo_automatico";
+  $("review-observation").value = "";
+  updateReviewDialog();
+  $("review-dialog").showModal();
+}
+function openPinAdmin(id) {
+  const m = state.mozas.find((x) => x.id === id);
+  $("pin-admin-name").textContent = m.nombre;
+  $("pin-admin-moza").value = id;
+  $("pin-admin-value").value = "";
+  $("pin-admin-repeat").value = "";
+  $("pin-admin-dialog").showModal();
+  $("pin-admin-value").focus();
+}
+async function saveExpected(id, minutes) {
+  const { error } = await supabase
+    .from("horas_esperadas")
+    .upsert(
+      {
+        semana_id: state.week.id,
+        moza_id: id,
+        minutos_esperados: minutes,
+        cantidad_francos: minutes === 2400 ? 2 : minutes === 2880 ? 1 : null,
+      },
+      { onConflict: "semana_id,moza_id" },
+    );
+  if (error) return toast(error.message, true);
+  await load();
+  toast("Horas esperadas guardadas");
+}
+async function recalculateClosedWeek(mozaId) {
+  if (state.week.estado !== "cerrada") return;
+  const [entriesResult, movementsResult, expectedResult] = await Promise.all([
+    supabase
+      .from("registros_horarios")
+      .select("*")
+      .eq("moza_id", mozaId)
+      .gte("fecha", state.week.fecha_inicio)
+      .lte("fecha", state.week.fecha_fin),
+    supabase
+      .from("movimientos_horas")
+      .select("*")
+      .eq("moza_id", mozaId)
+      .eq("semana_id", state.week.id),
+    supabase
+      .from("horas_esperadas")
+      .select("minutos_esperados")
+      .eq("moza_id", mozaId)
+      .eq("semana_id", state.week.id)
+      .maybeSingle(),
+  ]);
+  for (const result of [entriesResult, movementsResult, expectedResult])
+    if (result.error) throw result.error;
+  const movements = movementsResult.data || [],
+    manualMovements = movements.filter(
+      (x) =>
+        x.tipo !== "diferencia_semanal" &&
+        x.modalidad !== specialUseLabel &&
+        x.modalidad !== specialExpiryLabel,
+    ),
+    calculation = computeWeek({
+      entries: entriesResult.data || [],
+      movements: manualMovements,
+      expectedMinutes: expectedResult.data?.minutos_esperados || 0,
+    }),
+    granted = movements
+      .filter((x) => x.modalidad === specialCreditLabel)
+      .reduce((sum, x) => sum + Math.max(0, Number(x.minutos) || 0), 0),
+    specialUse = Math.min(granted, Math.max(0, -calculation.resultMinutes)),
+    specialExpiry = Math.max(0, granted - specialUse),
+    newRows = [];
+  if (specialUse)
+    newRows.push({
+      moza_id: mozaId,
+      semana_id: state.week.id,
+      fecha: state.week.fecha_fin,
+      minutos: -specialUse,
+      minutos_referencia: specialUse,
+      tipo: "devolucion",
+      modalidad: specialUseLabel,
+      observacion: "Recalculado automáticamente después de corregir un horario",
+      cargado_por: state.user.id,
+    });
+  if (specialExpiry)
+    newRows.push({
+      moza_id: mozaId,
+      semana_id: state.week.id,
+      fecha: state.week.fecha_fin,
+      minutos: -specialExpiry,
+      minutos_referencia: specialExpiry,
+      tipo: "ajuste",
+      modalidad: specialExpiryLabel,
+      observacion: "Recalculado automáticamente después de corregir un horario",
+      cargado_por: state.user.id,
+    });
+  newRows.push({
+    moza_id: mozaId,
+    semana_id: state.week.id,
+    fecha: state.week.fecha_fin,
+    minutos: calculation.resultMinutes + specialUse,
+    tipo: "diferencia_semanal",
+    observacion: `Semana ${state.week.fecha_inicio} al ${state.week.fecha_fin} recalculada`,
+    cargado_por: state.user.id,
+  });
+  let { error } = await supabase
+    .from("movimientos_horas")
+    .delete()
+    .eq("moza_id", mozaId)
+    .eq("semana_id", state.week.id)
+    .eq("tipo", "diferencia_semanal");
+  if (!error)
+    ({ error } = await supabase
+      .from("movimientos_horas")
+      .delete()
+      .eq("moza_id", mozaId)
+      .eq("semana_id", state.week.id)
+      .in("modalidad", [specialUseLabel, specialExpiryLabel]));
+  if (!error)
+    ({ error } = await supabase.from("movimientos_horas").insert(newRows));
+  if (error) throw error;
+}
+async function closeWeek() {
+  const missing = missingDays();
+  if (missing.length) {
+    alert(
+      `Antes de cerrar la semana deben definir los ${missing.length} días sin marcaciones que aparecen en Información.`,
+    );
+    return;
+  }
+  const reviews = pendingReviews();
+  if (reviews.length) {
+    alert(
+      `Antes de cerrar la semana deben resolver las ${reviews.length} revisiones pendientes.`,
+    );
+    return;
+  }
+  const openEntries = state.entries.filter(entryIsOpen);
+  if (openEntries.length) {
+    const names = openEntries
+      .map(
+        (e) =>
+          `${state.mozas.find((m) => m.id === e.moza_id)?.nombre} (${fmtDate(e.fecha)})`,
+      )
+      .join("\n");
+    alert(
+      `No se puede cerrar la semana porque hay marcaciones pendientes:\n\n${names}`,
+    );
+    return;
+  }
+  const defined = new Map(
+      state.mozas.map((m) => [
+        m.id,
+        state.entries.filter((e) => e.moza_id === m.id).length,
+      ]),
+    ),
+    pending = state.mozas.filter((m) => defined.get(m.id) < 7);
+  if (pending.length) {
+    const names = pending
+      .map((m) => `${m.nombre} (${defined.get(m.id)} de 7 días definidos)`)
+      .join("\n");
+    alert(
+      `No se puede cerrar la semana. Todavía faltan días por definir:\n\n${names}\n\nLos francos, vacaciones y feriados también deben registrarse.`,
+    );
+    return;
+  }
+  const preview = state.mozas
+    .map((m) => {
+      const c = weekCalculation(m.id),
+        special = Math.min(
+          specialCreditAvailable(m.id),
+          Math.max(0, -c.resultMinutes),
+        ),
+        result = c.resultMinutes + special,
+        resultLabel =
+          result > 0
+            ? `${fmtMin(result)} a favor`
+            : result < 0
+              ? `${fmtMin(Math.abs(result))} faltantes`
+              : "sin diferencia";
+      return `${m.nombre}: ${fmtMin(c.actualMinutes)} trabajadas + ${fmtMin(c.holidayMinutes)} feriado + ${fmtMin(c.bankUsedMinutes + special)} banco - ${fmtMin(c.expectedMinutes)} base = ${resultLabel}`;
+    })
+    .join("\n");
+  if (
+    !confirm(
+      `Este será el movimiento que se guardará en el banco:\n\n${preview}\n\n¿Confirmar el cierre?`,
+    )
+  )
+    return;
+  const automaticRows = [],
+    specialUsed = new Map();
+  for (const m of state.mozas) {
+    const calculation = weekCalculation(m.id),
+      available = specialCreditAvailable(m.id),
+      deficit = Math.max(0, -calculation.resultMinutes),
+      use = Math.min(available, deficit),
+      expire = Math.max(0, available - use);
+    specialUsed.set(m.id, use);
+    if (use)
+      automaticRows.push({
+        moza_id: m.id,
+        semana_id: state.week.id,
+        fecha: state.week.fecha_fin,
+        minutos: -use,
+        minutos_referencia: use,
+        tipo: "devolucion",
+        modalidad: specialUseLabel,
+        observacion: "Aplicado automáticamente al resultado final de la semana",
+        cargado_por: state.user.id,
+      });
+    if (expire)
+      automaticRows.push({
+        moza_id: m.id,
+        semana_id: state.week.id,
+        fecha: state.week.fecha_fin,
+        minutos: -expire,
+        minutos_referencia: expire,
+        tipo: "ajuste",
+        modalidad: specialExpiryLabel,
+        observacion:
+          "Saldo especial no utilizado; no se traslada a la semana siguiente",
+        cargado_por: state.user.id,
+      });
+  }
+  let { error } = await supabase
+    .from("movimientos_horas")
+    .delete()
+    .eq("semana_id", state.week.id)
+    .eq("tipo", "diferencia_semanal");
+  if (!error && automaticRows.length)
+    ({ error } = await supabase
+      .from("movimientos_horas")
+      .insert(automaticRows));
+  const rows = state.mozas.map((m) => ({
+    moza_id: m.id,
+    semana_id: state.week.id,
+    fecha: state.week.fecha_fin,
+    minutos: weekCalculation(m.id).resultMinutes + (specialUsed.get(m.id) || 0),
+    tipo: "diferencia_semanal",
+    observacion: `Semana ${state.week.fecha_inicio} al ${state.week.fecha_fin}`,
+    cargado_por: state.user.id,
+  }));
+  if (!error)
+    ({ error } = await supabase.from("movimientos_horas").insert(rows));
+  if (!error)
+    ({ error } = await supabase
+      .from("semanas")
+      .update({
+        estado: "cerrada",
+        cerrada_el: new Date().toISOString(),
+        cerrada_por: state.user.id,
+      })
+      .eq("id", state.week.id));
+  if (error) return toast(error.message, true);
+  await load();
+  toast("Semana cerrada · crédito especial calculado automáticamente");
+}
+$("login-form").onsubmit = async (e) => {
+  e.preventDefault();
+  if (!configured) return showLogin();
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: $("email").value.trim(),
+    password: $("password").value,
+  });
+  if (error) return showLogin("Correo o contraseña incorrectos");
+  state.user = data.user;
+  await load();
+};
+$("logout").onclick = async () => {
+  await supabase.auth.signOut();
+  state.user = null;
+  showLogin();
+};
+document.querySelectorAll(".tabs button").forEach(
+  (b) =>
+    (b.onclick = () => {
+      document
+        .querySelectorAll(".tabs button")
+        .forEach((x) => x.classList.toggle("active", x === b));
+      document
+        .querySelectorAll(".tab-panel")
+        .forEach((x) => x.classList.toggle("hidden", x.id !== b.dataset.tab));
+    }),
+);
+setupTimeSelects();
+document
+  .querySelectorAll("[data-now]")
+  .forEach((b) => (b.onclick = () => setTime(b.dataset.now, currentTime())));
+$("split").onchange = () =>
+  $("split-fields").classList.toggle("hidden", !$("split").checked);
+$("day-status").onchange = () => {
+  const status = $("day-status").value,
+    workLike = isWorkStatus(status),
+    exists = Boolean(
+      state.entries.find(
+        (x) =>
+          x.moza_id === Number($("entry-moza").value) &&
+          x.fecha === $("entry-date").value,
+      ),
+    );
+  $("work-fields").classList.toggle("hidden", !workLike);
+  $("save-entry-only").classList.toggle("hidden", status !== "trabajo");
+  $("save-entry-only").textContent = exists
+    ? "Dejar salida pendiente"
+    : "Guardar solo entrada";
+  $("schedule-holiday").classList.toggle(
+    "hidden",
+    status !== "feriado_parcial" || exists,
+  );
+  $("save-complete").textContent =
+    status === "feriado_parcial"
+      ? "Guardar feriado parcial con horario"
+      : workLike
+        ? "Guardar jornada completa"
+        : "Guardar día";
+};
+$("entry-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const status = $("day-status").value,
+    workLike = isWorkStatus(status),
+    scheduleHoliday =
+      status === "feriado_parcial" && e.submitter?.value === "schedule-holiday",
+    pending = status === "trabajo" && e.submitter?.value === "pending",
+    split = workLike && !pending && !scheduleHoliday && $("split").checked,
+    start1 = scheduleHoliday ? "00:00" : getTime("start1"),
+    end1 = scheduleHoliday ? "00:00" : pending ? null : getTime("end1"),
+    minutes =
+      workLike && !pending && !scheduleHoliday
+        ? minBetween(start1, end1) +
+          (split ? minBetween(getTime("start2"), getTime("end2")) : 0)
+        : 0,
+    previous = state.entries.find(
+      (x) =>
+        x.moza_id === Number($("entry-moza").value) &&
+        x.fecha === $("entry-date").value,
+    ),
+    row = {
+      moza_id: Number($("entry-moza").value),
+      fecha: $("entry-date").value,
+      estado_dia: status,
+      entrada_1: workLike ? start1 : "00:00",
+      salida_1: workLike ? end1 : "00:00",
+      entrada_2: split ? getTime("start2") : null,
+      salida_2: split ? getTime("end2") : null,
+      minutos_trabajados: minutes,
+      observacion:
+        $("entry-note").value ||
+        (scheduleHoliday
+          ? "Feriado parcial programado"
+          : status === "feriado_completo"
+            ? "Feriado completo"
+            : ""),
+      cargado_por: state.user.id,
+      modificado_el: new Date().toISOString(),
+      origen: previous?.origen === "marcador" ? "correccion" : "manual",
+      estado_marcacion: pending ? "trabajando" : "finalizada",
+    };
+  const { error } = await supabase
+    .from("registros_horarios")
+    .upsert(row, { onConflict: "moza_id,fecha" });
+  if (error) return toast(error.message, true);
+  try {
+    await recalculateClosedWeek(row.moza_id);
+  } catch (recalculationError) {
+    return toast(
+      `El horario se guardó, pero no se pudo recalcular el saldo: ${recalculationError.message}`,
+      true,
+    );
+  }
+  state.viewDate = row.fecha;
+  $("entry-dialog").close();
+  await load();
+  toast(
+    state.week.estado === "cerrada"
+      ? "Horario y saldo de la semana recalculados"
+      : scheduleHoliday
+        ? "Feriado parcial programado"
+        : pending
+          ? "Entrada guardada · salida pendiente"
+          : "Día guardado",
+  );
+};
+$("missing-day-status").onchange = updateMissingDayDialog;
+$("missing-day-close").onclick = () => $("missing-day-dialog").close();
+$("missing-day-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const id = Number($("missing-day-moza").value),
+    date = $("missing-day-date").value,
+    status = $("missing-day-status").value;
+  if (status === "pendiente") {
+    $("missing-day-dialog").close();
+    return toast("El día continúa pendiente");
+  }
+  if (status === "olvido" || status === "feriado_parcial") {
+    $("missing-day-dialog").close();
+    state.viewDate = date;
+    render();
+    openEntry(id);
+    $("day-status").value = status === "olvido" ? "trabajo" : "feriado_parcial";
+    $("day-status").dispatchEvent(new Event("change"));
+    $("entry-note").value = $("missing-day-note").value.trim();
+    return;
+  }
+  const labels = {
+      franco: "Franco",
+      vacaciones: "Vacaciones",
+      feriado_completo: "Feriado completo",
+      ausente: "Ausencia",
+      licencia: "Licencia",
+    },
+    row = {
+      moza_id: id,
+      fecha: date,
+      estado_dia: status,
+      entrada_1: "00:00",
+      salida_1: "00:00",
+      entrada_2: null,
+      salida_2: null,
+      minutos_trabajados: 0,
+      observacion:
+        $("missing-day-note").value.trim() ||
+        `${labels[status]} registrado desde Información`,
+      cargado_por: state.user.id,
+      modificado_el: new Date().toISOString(),
+      origen: "manual",
+      estado_marcacion: "finalizada",
+    };
+  const { error } = await supabase
+    .from("registros_horarios")
+    .upsert(row, { onConflict: "moza_id,fecha" });
+  if (error) return toast(error.message, true);
+  $("missing-day-dialog").close();
+  await load();
+  toast(`${labels[status]} registrado`);
+};
+$("return-type").onchange = updateMovementDialog;
+$("return-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const id = Number($("return-moza").value),
+    type = $("return-type").value,
+    minutes =
+      Number($("return-hours").value) * 60 + Number($("return-minutes").value),
+    date = $("return-date").value,
+    observation = $("return-observation").value.trim();
+  if (minutes <= 0) return toast("Indicá una cantidad de horas", true);
+  if (date < state.week.fecha_inicio || date > state.week.fecha_fin)
+    return toast("La fecha debe pertenecer a la semana actual", true);
+  if (!observation) return toast("Escribí una observación breve", true);
+  if (type === "devolucion" && minutes > Math.max(0, balance(id)))
+    return toast("No hay suficientes horas confirmadas en el banco", true);
+  const row = {
+    moza_id: id,
+    semana_id: state.week.id,
+    fecha: date,
+    minutos: type === "devolucion" ? -minutes : 0,
+    minutos_referencia: minutes,
+    tipo: type === "devolucion" ? "devolucion" : "ajuste",
+    modalidad: $("return-note").value,
+    observacion:
+      type === "devolucion"
+        ? observation
+        : `Compensación semanal: ${observation}`,
+    cargado_por: state.user.id,
+  };
+  const { error } = await supabase.from("movimientos_horas").insert(row);
+  if (error) return toast(error.message, true);
+  $("return-dialog").close();
+  await load();
+  toast(
+    type === "devolucion"
+      ? "Horas del banco aplicadas"
+      : "Compensación registrada",
+  );
+};
+$("close-week").onclick = closeWeek;
+$("review-type").onchange = updateReviewDialog;
+$("review-close").onclick = () => $("review-dialog").close();
+$("review-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const entry = state.entries.find(
+      (x) => x.id === Number($("review-entry").value),
+    ),
+    type = $("review-type").value;
+  if (!entry) return toast("No se encontró la jornada", true);
+  if (type === "corregir") {
+    $("review-dialog").close();
+    state.viewDate = entry.fecha;
+    render();
+    openEntry(entry.moza_id);
+    return;
+  }
+  const observation = $("review-observation").value.trim();
+  if (type !== "calculo_automatico" && !observation)
+    return toast("Escribí una observación breve", true);
+  const deficit = 480 - actualEntryMinutes(entry);
+  if (type === "devolucion" && deficit > Math.max(0, balance(entry.moza_id)))
+    return toast("No hay suficientes horas confirmadas en el banco", true);
+  const labels = {
+      calculo_automatico: "Cálculo automático al cierre",
+      compensacion_semanal: "Compensar con horas de esta misma semana",
+      devolucion: "Usar horas del banco anterior",
+      diferencia: "Dejar como diferencia semanal",
+    },
+    row = {
+      moza_id: entry.moza_id,
+      semana_id: state.week.id,
+      fecha: entry.fecha,
+      minutos: type === "devolucion" ? -deficit : 0,
+      minutos_referencia:
+        type === "diferencia" || type === "calculo_automatico" ? 0 : deficit,
+      tipo: type === "devolucion" ? "devolucion" : "ajuste",
+      modalidad: labels[type],
+      observacion: `${reviewToken(entry)} ${observation || "Se calculará con el resultado total de la semana"}`,
+      cargado_por: state.user.id,
+    };
+  const { error } = await supabase.from("movimientos_horas").insert(row);
+  if (error) return toast(error.message, true);
+  $("review-dialog").close();
+  await load();
+  toast(
+    type === "calculo_automatico"
+      ? "Quedó programado para el cierre semanal"
+      : "Jornada revisada",
+  );
+};
+$("close-week").onclick = closeWeek;
+$("password-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const password = $("new-password").value,
+    repeat = $("repeat-password").value;
+  if (password.length < 8)
+    return toast("La contraseña debe tener al menos 8 caracteres", true);
+  if (password !== repeat) return toast("Las contraseñas no coinciden", true);
+  const button = e.submitter;
+  button.disabled = true;
+  button.textContent = "Guardando…";
+  const { error } = await supabase.auth.updateUser({ password });
+  button.disabled = false;
+  button.textContent = "Guardar nueva contraseña";
+  if (error) return toast(error.message, true);
+  e.target.reset();
+  toast("Contraseña cambiada correctamente");
+};
+$("generate-device-code").onclick = async () => {
+  const button = $("generate-device-code");
+  button.disabled = true;
+  button.textContent = "Generando…";
+  const { data, error } = await supabase.rpc("crear_codigo_activacion", {
+    p_nombre: $("device-name").value.trim() || "Computadora Munster",
+  });
+  button.disabled = false;
+  button.textContent = "Generar código de activación";
+  if (error) return toast(error.message, true);
+  const row = Array.isArray(data) ? data[0] : data,
+    box = $("activation-result");
+  box.classList.remove("hidden");
+  box.innerHTML = `<p>Código de un solo uso:</p><strong>${row.codigo}</strong><p>Vence en 15 minutos. Abrí el marcador en la computadora del trabajo e ingresalo allí.</p>`;
+  toast("Código generado");
+};
+$("pin-admin-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const pin = $("pin-admin-value").value,
+    repeat = $("pin-admin-repeat").value;
+  if (pin !== repeat) return toast("Los PIN no coinciden", true);
+  if (!/^\d{4,6}$/.test(pin))
+    return toast("El PIN debe tener entre 4 y 6 números", true);
+  const button = e.submitter;
+  button.disabled = true;
+  const { error } = await supabase.rpc("actualizar_pin_moza", {
+    p_moza_id: Number($("pin-admin-moza").value),
+    p_pin: pin,
+  });
+  button.disabled = false;
+  if (error) return toast(error.message, true);
+  $("pin-admin-dialog").close();
+  toast("PIN guardado correctamente");
+};
+$("pin-admin-close").onclick = () => $("pin-admin-dialog").close();
+async function selectWeek(start, preferredDate = start) {
+  if (start > currentWeekStart()) return;
+  state.selectedWeekStart = start;
+  state.viewDate = preferredDate;
+  try {
+    await load();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+async function moveDay(delta) {
+  const next = shiftDate(state.viewDate, delta),
+    nextWeek = weekDates(new Date(`${next}T12:00:00`))[0];
+  if (nextWeek !== state.selectedWeekStart) return selectWeek(nextWeek, next);
+  state.viewDate = next;
+  render();
+}
+$("prev-day").onclick = () => moveDay(-1);
+$("next-day").onclick = () => moveDay(1);
+$("today-btn").onclick = () => selectWeek(currentWeekStart(), today());
+$("view-date").onchange = (e) => {
+  const date = e.target.value,
+    start = weekDates(new Date(`${date}T12:00:00`))[0];
+  selectWeek(start, date);
+};
+$("prev-week").onclick = () =>
+  selectWeek(shiftDate(state.selectedWeekStart, -7));
+$("next-week").onclick = () =>
+  selectWeek(shiftDate(state.selectedWeekStart, 7));
+$("current-week").onclick = () => selectWeek(currentWeekStart(), today());
+$("report-period").onchange = () => {
+  const value = $("report-period").value,
+    range = value === "range",
+    summary = value === "summary";
+  $("report-from-start-wrap").classList.toggle("hidden", !range);
+  $("report-range-start-wrap").classList.toggle("hidden", !range);
+  $("report-range-end-wrap").classList.toggle("hidden", !range);
+  $("report-type-wrap").classList.toggle("hidden", summary);
+  $("report-employee-wrap").classList.toggle(
+    "hidden",
+    summary || $("report-type").value !== "individual",
+  );
+  $("report-hint").textContent = summary
+    ? "Muestra el resultado confirmado de semanas cerradas y, por separado, las horas registradas en la semana actual."
+    : "Si la semana está abierta, el PDF se marcará como informe provisorio.";
+  if (range && !$("report-range-start").value)
+    $("report-range-start").value = state.week.fecha_inicio;
+  if (range && !$("report-range-end").value)
+    $("report-range-end").value = state.week.fecha_fin;
+};
+$("report-from-start").onchange = () => {
+  $("report-range-start").disabled = $("report-from-start").checked;
+};
+$("report-type").onchange = () =>
+  $("report-employee-wrap").classList.toggle(
+    "hidden",
+    $("report-period").value === "summary" ||
+      $("report-type").value !== "individual",
+  );
+async function reportData() {
+  const range = $("report-period").value === "range",
+    fromStart = range && $("report-from-start").checked;
+  let start = range ? $("report-range-start").value : state.week.fecha_inicio;
+  const end = range ? $("report-range-end").value : state.week.fecha_fin;
+  if (fromStart) {
+    const first = await supabase
+      .from("registros_horarios")
+      .select("fecha")
+      .order("fecha", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (first.error) throw first.error;
+    if (!first.data) throw new Error("Todavía no hay marcaciones registradas");
+    start = weekDates(new Date(`${first.data.fecha}T12:00:00`))[0];
+  }
+  if (!start || !end)
+    throw new Error("Elegí la semana inicial y la semana final");
+  if (start > end)
+    throw new Error("La semana inicial no puede ser posterior a la final");
+  const [entries, movements, historyMovements, weeks, expectedRows] =
+    await Promise.all([
+      supabase
+        .from("registros_horarios")
+        .select("*")
+        .gte("fecha", start)
+        .lte("fecha", end)
+        .order("fecha"),
+      supabase
+        .from("movimientos_horas")
+        .select("*")
+        .gte("fecha", start)
+        .lte("fecha", end)
+        .order("fecha"),
+      supabase
+        .from("movimientos_horas")
+        .select("*")
+        .lte("fecha", end)
+        .order("fecha"),
+      supabase
+        .from("semanas")
+        .select("*")
+        .gte("fecha_inicio", start)
+        .lte("fecha_fin", end)
+        .order("fecha_inicio"),
+      supabase.from("horas_esperadas").select("*"),
+    ]);
+  for (const x of [entries, movements, historyMovements, weeks, expectedRows])
+    if (x.error) throw x.error;
+  return {
+    start,
+    end,
+    entries: entries.data,
+    movements: movements.data,
+    historyMovements: historyMovements.data,
+    weeks: weeks.data,
+    expectedRows: expectedRows.data,
+    monthly: false,
+    range,
+    fromStart,
+  };
+}
+async function downloadSummaryPdf() {
+  const button = $("download-pdf"),
+    original = button.textContent;
+  try {
+    button.disabled = true;
+    button.textContent = "Preparando resumen…";
+    const systemStart = "2026-08-17",
+      cutoff = today(),
+      currentStart = currentWeekStart(),
+      [weeksResult, movementsResult, entriesResult, expectedResult] =
+        await Promise.all([
+          supabase
+            .from("semanas")
+            .select("id,fecha_inicio,fecha_fin,estado")
+            .gte("fecha_inicio", systemStart)
+            .lte("fecha_inicio", cutoff)
+            .order("fecha_inicio"),
+          supabase
+            .from("movimientos_horas")
+            .select("moza_id,semana_id,fecha,minutos,minutos_referencia,tipo")
+            .gte("fecha", systemStart)
+            .lte("fecha", cutoff),
+          supabase
+            .from("registros_horarios")
+            .select("moza_id,fecha,minutos_trabajados,estado_dia")
+            .gte("fecha", systemStart)
+            .lte("fecha", cutoff),
+          supabase
+            .from("horas_esperadas")
+            .select("moza_id,semana_id,minutos_esperados"),
+        ]);
+    for (const result of [
+      weeksResult,
+      movementsResult,
+      entriesResult,
+      expectedResult,
+    ])
+      if (result.error) throw result.error;
+    const weeks = weeksResult.data || [],
+      movements = movementsResult.data || [],
+      entries = entriesResult.data || [],
+      expectedRows = expectedResult.data || [],
+      closedIds = new Set(
+        weeks.filter((w) => w.fecha_fin < currentStart).map((w) => w.id),
+      ),
+      openWeek = weeks.find(
+        (w) => w.estado === "abierta" && w.fecha_inicio === currentStart,
+      ),
+      rows = state.mozas.map((m) => {
+        const personMoves = movements.filter((x) => x.moza_id === m.id),
+          completedWeeks = weeks.filter((w) => w.fecha_fin < currentStart);
+        let confirmed = personMoves
+          .filter((x) => x.fecha < currentStart)
+          .reduce((sum, x) => sum + Number(x.minutos || 0), 0);
+        for (const week of completedWeeks) {
+          if (
+            personMoves.some(
+              (x) => x.semana_id === week.id && x.tipo === "diferencia_semanal",
+            )
+          )
+            continue;
+          const weekEntries = entries.filter(
+              (x) =>
+                x.moza_id === m.id &&
+                x.fecha >= week.fecha_inicio &&
+                x.fecha <= week.fecha_fin,
+            ),
+            weekMoves = personMoves.filter((x) => x.semana_id === week.id),
+            base =
+              expectedRows.find(
+                (x) => x.moza_id === m.id && x.semana_id === week.id,
+              )?.minutos_esperados || 0;
+          confirmed += computeWeek({
+            entries: weekEntries,
+            movements: weekMoves,
+            expectedMinutes: base,
+          }).resultMinutes;
+        }
+        const currentBankUsed = openWeek
+            ? personMoves
+                .filter(
+                  (x) =>
+                    x.semana_id === openWeek.id &&
+                    x.tipo === "devolucion" &&
+                    Number(x.minutos) < 0,
+                )
+                .reduce(
+                  (sum, x) => sum + Math.abs(Number(x.minutos) || 0),
+                  0,
+                )
+            : 0,
+          currentEntries = openWeek
+            ? entries.filter(
+                (x) => x.moza_id === m.id && x.fecha >= currentStart,
+              )
+            : [],
+          currentActual = currentEntries.reduce(
+            (sum, x) => sum + actualEntryMinutes(x),
+            0,
+          ),
+          currentHoliday = currentEntries.reduce(
+            (sum, x) => sum + holidayRecognitionEntry(x),
+            0,
+          );
+        return {
+          m,
+          confirmed: confirmed - currentBankUsed,
+          currentActual,
+          currentHoliday,
+          currentBankUsed,
+        };
+      }),
+      { jsPDF } = await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm"),
+      doc = new jsPDF({ unit: "mm", format: "a4" }),
+      green = [28, 76, 56],
+      gold = [201, 157, 78],
+      ink = [34, 36, 33],
+      muted = [105, 107, 101],
+      soft = [244, 243, 237],
+      pale = [235, 244, 238],
+      red = [151, 63, 54],
+      safe = (s) => String(s ?? "").replace(/[–—]/g, "-"),
+      balanceText = (v) =>
+        v > 0
+          ? `${fmtMin(v)} a favor`
+          : v < 0
+            ? `${fmtMin(Math.abs(v))} pendientes de trabajar`
+            : "0 h · al día";
+    doc.setFillColor(...green);
+    doc.rect(0, 0, 210, 42, "F");
+    doc.setFillColor(255, 255, 255);
+    doc.circle(18, 20, 8, "F");
+    doc.setTextColor(...green);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.text("M", 18, 22.5, { align: "center" });
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(8);
+    doc.text("MUNSTER - EQUIPO", 31, 12);
+    doc.setFontSize(18);
+    doc.text("RESUMEN GENERAL DE SALDOS", 31, 23);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text(`Actualizado al ${fmtDate(cutoff)}`, 31, 32);
+    doc.setDrawColor(...gold);
+    doc.setLineWidth(1.2);
+    doc.line(31, 35, 100, 35);
+    doc.setTextColor(...green);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text("SITUACION GENERAL DEL EQUIPO", 14, 55);
+    doc.setTextColor(...muted);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.text(
+      `Saldo disponible desde el ${fmtDate(systemStart)}, descontando usos del banco de la semana actual.`,
+      14,
+      62,
+    );
+    let y = 70;
+    doc.setFillColor(...green);
+    doc.rect(14, y, 182, 11, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    doc.text("MOZA", 19, y + 7);
+    doc.text("SALDO DISPONIBLE ACTUALIZADO", 56, y + 7);
+    doc.text("SEMANA ACTUAL EN CURSO", 142, y + 7);
+    y += 11;
+    for (const row of rows) {
+      doc.setFillColor(...soft);
+      doc.rect(14, y, 182, 18, "F");
+      doc.setFillColor(...green);
+      doc.circle(22, y + 9, 5, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      doc.text(row.m.nombre[0].toUpperCase(), 22, y + 11, { align: "center" });
+      doc.setTextColor(...ink);
+      doc.setFontSize(10);
+      doc.text(safe(row.m.nombre), 31, y + 10.5);
+      doc.setTextColor(...(row.confirmed < 0 ? red : green));
+      doc.setFontSize(9);
+      doc.text(safe(balanceText(row.confirmed)), 56, y + 10.5);
+      doc.setTextColor(...ink);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.2);
+      const currentText = openWeek
+          ? `${fmtMin(row.currentActual)} trabajadas hasta hoy${row.currentHoliday ? ` + ${fmtMin(row.currentHoliday)} feriado` : ""}${row.currentBankUsed ? ` · ${fmtMin(row.currentBankUsed)} usadas del banco` : ""}`
+          : "Sin semana abierta",
+        currentLines = doc.splitTextToSize(safe(currentText), 50).slice(0, 2);
+      doc.text(currentLines, 142, y + 7.5);
+      y += 20;
+    }
+    doc.setFillColor(...pale);
+    doc.roundedRect(14, y + 3, 182, 24, 2, 2, "F");
+    doc.setTextColor(...green);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text("COMO LEER ESTE RESUMEN", 19, y + 10);
+    doc.setTextColor(...ink);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.text(
+      "El saldo disponible descuenta de inmediato las horas del banco usadas esta semana.",
+      19,
+      y + 17,
+    );
+    doc.text(
+      "La semana actual muestra horas trabajadas y uso del banco, sin deuda por dias futuros.",
+      19,
+      y + 23,
+    );
+    doc.setDrawColor(220);
+    doc.line(14, 283, 196, 283);
+    doc.setTextColor(...muted);
+    doc.setFontSize(7);
+    doc.text(
+      `Generado el ${new Date().toLocaleString("es-AR")} - ${state.user.email}`,
+      14,
+      289,
+    );
+    doc.text("Pagina 1 de 1", 196, 289, { align: "right" });
+    doc.save(`resumen-general-horas-${cutoff}.pdf`);
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+async function downloadPdf() {
+  if ($("report-period").value === "summary") return downloadSummaryPdf();
+  try {
+    const d = await reportData(),
+      individual = $("report-type").value === "individual",
+      selected = Number($("report-employee").value),
+      people = individual
+        ? state.mozas.filter((m) => m.id === selected)
+        : state.mozas,
+      { jsPDF } = await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm"),
+      doc = new jsPDF({ unit: "mm", format: "a4" }),
+      provisional =
+        d.weeks.some((w) => w.estado === "abierta") ||
+        (!d.range && !d.monthly && state.week.estado === "abierta"),
+      green = [28, 76, 56],
+      gold = [201, 157, 78],
+      ink = [34, 36, 33],
+      muted = [105, 107, 101],
+      soft = [244, 243, 237],
+      pale = [235, 244, 238],
+      weekIds = new Set(d.weeks.map((w) => w.id));
+    const safe = (s) => String(s ?? "").replace(/[–—]/g, "-");
+    const box = (x, y, w, h, label, value, color = ink) => {
+      doc.setFillColor(...soft);
+      doc.roundedRect(x, y, w, h, 2, 2, "F");
+      doc.setTextColor(...muted);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.5);
+      doc.text(label.toUpperCase(), x + 3, y + 5);
+      doc.setTextColor(...color);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.text(safe(value), x + 3, y + 12);
+    };
+    const header = (m) => {
+      doc.setFillColor(...green);
+      doc.rect(0, 0, 210, 38, "F");
+      doc.setFillColor(255, 255, 255);
+      doc.circle(17, 18, 7, "F");
+      doc.setTextColor(...green);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.text(m.nombre[0].toUpperCase(), 17, 20, { align: "center" });
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(8);
+      doc.text("MUNSTER - EQUIPO", 29, 11);
+      doc.setFontSize(18);
+      doc.text("CONTROL DE HORAS", 29, 21);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.text(`${fmtDate(d.start)} al ${fmtDate(d.end)}`, 29, 29);
+      doc.setDrawColor(...gold);
+      doc.setLineWidth(1.2);
+      doc.line(29, 32, 88, 32);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      doc.text(
+        provisional ? "INFORME PROVISORIO" : "INFORME DEFINITIVO",
+        196,
+        19,
+        { align: "right" },
+      );
+      doc.setTextColor(...ink);
+      doc.setFontSize(17);
+      doc.text(m.nombre, 14, 49);
+    };
+    const addDailyHeader = (y) => {
+      doc.setFillColor(...green);
+      doc.rect(14, y, 182, 8, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(7.5);
+      doc.text("FECHA", 17, y + 5.3);
+      doc.text("ESTADO", 43, y + 5.3);
+      doc.text("HORARIO", 77, y + 5.3);
+      doc.text("TOTAL", 143, y + 5.3);
+      doc.text("OBSERVACION", 163, y + 5.3);
+      return y + 8;
+    };
+    const dateList = (entries) => {
+      if (d.monthly) return entries;
+      const result = [];
+      for (
+        let x = new Date(`${d.start}T12:00:00`),
+          last = new Date(`${d.end}T12:00:00`);
+        x <= last;
+        x.setDate(x.getDate() + 1)
+      ) {
+        const iso = localIso(x);
+        result.push(
+          entries.find((e) => e.fecha === iso) || {
+            fecha: iso,
+            estado_dia: "sin_definir",
+          },
+        );
+      }
+      return result;
+    };
+    for (let personIndex = 0; personIndex < people.length; personIndex++) {
+      if (personIndex) doc.addPage();
+      const m = people[personIndex],
+        es = d.entries.filter((e) => e.moza_id === m.id),
+        moves = d.movements.filter((x) => x.moza_id === m.id),
+        history = d.historyMovements.filter((x) => x.moza_id === m.id),
+        activeWeekIds = new Set(
+          d.weeks
+            .filter(
+              (w) =>
+                es.some(
+                  (e) => e.fecha >= w.fecha_inicio && e.fecha <= w.fecha_fin,
+                ) || moves.some((x) => x.semana_id === w.id),
+            )
+            .map((w) => w.id),
+        ),
+        expectedTotal = d.expectedRows
+          .filter((x) => x.moza_id === m.id && activeWeekIds.has(x.semana_id))
+          .reduce((a, x) => a + Number(x.minutos_esperados || 0), 0),
+        periodCalculation = computeWeek({
+          entries: es,
+          movements: moves,
+          expectedMinutes: expectedTotal,
+        }),
+        actualTotal = periodCalculation.actualMinutes,
+        holidayTotal = periodCalculation.holidayMinutes,
+        computedTotal = periodCalculation.computedMinutes,
+        returned = periodCalculation.bankUsedMinutes,
+        compensated = moves
+          .filter(isWeekCompensation)
+          .reduce((a, x) => a + movementMinutes(x), 0),
+        requiredTotal = Math.max(
+          0,
+          periodCalculation.expectedMinutes - returned,
+        ),
+        difference = periodCalculation.resultMinutes,
+        priorBalance = history
+          .filter((x) => x.fecha < d.start)
+          .reduce((a, x) => a + Number(x.minutos || 0), 0),
+        confirmed = computeBalance(history),
+        weeklyChange = confirmed - priorBalance;
+      header(m);
+      box(14, 55, 34, 17, "Horas base", fmtMin(expectedTotal));
+      box(51, 55, 34, 17, "Trabajadas", fmtMin(actualTotal));
+      box(88, 55, 34, 17, "Reconoc. feriado", fmtMin(holidayTotal));
+      box(125, 55, 34, 17, "Usadas del banco", fmtMin(returned));
+      box(162, 55, 34, 17, "Computadas", fmtMin(computedTotal));
+      const balanceText = (v) =>
+          v > 0
+            ? `${fmtMin(v)} a favor`
+            : v < 0
+              ? `${fmtMin(Math.abs(v))} pendientes de trabajar`
+              : "0 h",
+        resultText =
+          difference > 0
+            ? `${fmtMin(difference)} a favor`
+            : difference < 0
+              ? `${fmtMin(Math.abs(difference))} pendientes de trabajar`
+              : "Sin diferencia",
+        periodValue = provisional ? difference : weeklyChange,
+        displayedFinal = provisional ? priorBalance + periodValue : confirmed,
+        periodResultText = d.range ? balanceText(periodValue) : resultText,
+        periodComponents = d.range
+          ? d.weeks.map((w) =>
+              moves
+                .filter((x) => x.semana_id === w.id)
+                .reduce((a, x) => a + Number(x.minutos || 0), 0),
+            )
+          : [periodValue],
+        favorTotal =
+          Math.max(0, priorBalance) +
+          periodComponents.filter((v) => v > 0).reduce((a, v) => a + v, 0),
+        pendingTotal =
+          Math.abs(Math.min(0, priorBalance)) +
+          periodComponents
+            .filter((v) => v < 0)
+            .reduce((a, v) => a + Math.abs(v), 0),
+        priorLabel =
+          priorBalance > 0
+            ? "HORAS A FAVOR ACUMULADAS DE SEMANAS ANTERIORES"
+            : priorBalance < 0
+              ? "HORAS PENDIENTES DE TRABAJAR DE SEMANAS ANTERIORES"
+              : "SALDO ACUMULADO DE SEMANAS ANTERIORES",
+        periodLabel = d.range
+          ? "RESULTADO DEL PERIODO SELECCIONADO"
+          : provisional
+            ? "RESULTADO PROVISORIO DE ESTA SEMANA"
+            : "RESULTADO DE ESTA SEMANA",
+        compensatedBalance =
+          priorBalance * periodValue < 0
+            ? Math.min(Math.abs(priorBalance), Math.abs(periodValue))
+            : 0;
+      let equation;
+      if (!favorTotal && !pendingTotal) equation = "0 h = 0 h";
+      else if (!favorTotal)
+        equation = `${fmtMin(pendingTotal)} pendientes = ${balanceText(displayedFinal)}`;
+      else if (!pendingTotal)
+        equation = `${fmtMin(favorTotal)} a favor = ${balanceText(displayedFinal)}`;
+      else
+        equation =
+          pendingTotal >= favorTotal
+            ? `${fmtMin(pendingTotal)} pendientes - ${fmtMin(favorTotal)} a favor = ${balanceText(displayedFinal)}`
+            : `${fmtMin(favorTotal)} a favor - ${fmtMin(pendingTotal)} pendientes = ${balanceText(displayedFinal)}`;
+      let movementExplanation;
+      if (!periodValue)
+        movementExplanation =
+          "El saldo anterior no cambió durante este período.";
+      else if (!priorBalance)
+        movementExplanation =
+          periodValue > 0
+            ? `Se incorporaron ${fmtMin(periodValue)} a favor al saldo.`
+            : `Se incorporaron ${fmtMin(Math.abs(periodValue))} pendientes de trabajar al saldo.`;
+      else if (compensatedBalance)
+        movementExplanation =
+          periodValue > 0
+            ? `${fmtMin(compensatedBalance)} a favor compensaron horas pendientes anteriores.`
+            : `${fmtMin(compensatedBalance)} pendientes se descontaron de las horas a favor anteriores.`;
+      else
+        movementExplanation =
+          periodValue > 0
+            ? `Se sumaron ${fmtMin(periodValue)} a favor al saldo anterior.`
+            : `Se sumaron ${fmtMin(Math.abs(periodValue))} pendientes de trabajar al saldo anterior.`;
+      doc.setFillColor(...soft);
+      doc.roundedRect(14, 76, 182, 52, 2, 2, "F");
+      doc.setTextColor(...green);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text("MOVIMIENTO Y CUENTA FINAL DEL SALDO", 18, 82);
+      doc.setFontSize(7.3);
+      doc.setTextColor(...ink);
+      doc.text(priorLabel, 18, 88);
+      doc.text(safe(balanceText(priorBalance)), 192, 88, { align: "right" });
+      doc.text(periodLabel, 18, 94);
+      doc.text(safe(periodResultText), 192, 94, { align: "right" });
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(...muted);
+      doc.setFontSize(7.3);
+      doc.text("QUE OCURRIO:", 18, 100);
+      doc.text(safe(movementExplanation), 43, 100);
+      doc.setFillColor(255, 255, 255);
+      doc.roundedRect(18, 104, 174, 10, 1.5, 1.5, "F");
+      doc.setTextColor(...ink);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(doc.getTextWidth(safe(equation)) > 168 ? 7.5 : 9.5);
+      doc.text(safe(equation), 105, 110.5, { align: "center" });
+      doc.setFillColor(...(displayedFinal >= 0 ? green : [151, 63, 54]));
+      doc.roundedRect(16, 117, 178, 9, 1.5, 1.5, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(8.5);
+      doc.text("SALDO ACTUAL ACUMULADO", 19, 123);
+      doc.text(safe(balanceText(displayedFinal)), 191, 123, { align: "right" });
+      let y = 145;
+      if (!d.range) {
+        doc.setTextColor(...green);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(11);
+        doc.text("DETALLE DIARIO", 14, 141);
+        y = addDailyHeader(y);
+        for (const e of dateList(es)) {
+          const works = isWorkStatus(e.estado_dia),
+            plannedHoliday =
+              e.estado_dia === "feriado_parcial" &&
+              e.entrada_1?.slice(0, 5) === "00:00" &&
+              e.salida_1?.slice(0, 5) === "00:00" &&
+              actualEntryMinutes(e) === 0,
+            pending = works && (!e.salida_1 || (e.entrada_2 && !e.salida_2)),
+            status =
+              e.estado_dia === "feriado_parcial"
+                ? "FERIADO PARCIAL"
+                : e.estado_dia === "sin_definir"
+                  ? "SIN DEFINIR"
+                  : works
+                    ? pending
+                      ? "PENDIENTE"
+                      : "TRABAJO"
+                    : dayLabel(e.estado_dia).toUpperCase(),
+            schedule = plannedHoliday
+              ? "-"
+              : works && e.entrada_1
+                ? pending
+                  ? `${e.entrada_1.slice(0, 5)} - salida pendiente`
+                  : `${e.entrada_1.slice(0, 5)}-${e.salida_1.slice(0, 5)}${e.entrada_2 && e.salida_2 ? ` / ${e.entrada_2.slice(0, 5)}-${e.salida_2.slice(0, 5)}` : ""}`
+                : "-",
+            note = safe(e.observacion || "-"),
+            noteLines = doc.splitTextToSize(note, 31).slice(0, 1),
+            rowH = 8;
+          doc.setFillColor(y % 2 ? 250 : 247, 249, 247);
+          doc.rect(14, y, 182, rowH, "F");
+          doc.setTextColor(...ink);
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(7.5);
+          doc.text(fmtDate(e.fecha), 17, y + 5.2);
+          doc.setFont("helvetica", "bold");
+          doc.text(status, 43, y + 5.2);
+          doc.setFont("helvetica", "normal");
+          doc.text(safe(schedule), 77, y + 5.2);
+          doc.text(
+            works && e.minutos_trabajados
+              ? fmtMin(e.minutos_trabajados)
+              : e.estado_dia === "feriado_completo"
+                ? "8 h"
+                : e.estado_dia === "feriado_parcial"
+                  ? fmtMin(creditedEntryMinutes(e))
+                  : "-",
+            143,
+            y + 5.2,
+          );
+          doc.text(noteLines, 163, y + 5.2);
+          y += rowH;
+        }
+        doc.setFillColor(...pale);
+        doc.rect(14, y, 182, 10, "F");
+        doc.setTextColor(...green);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        doc.text("TOTALES", 17, y + 6.3);
+        doc.text(fmtMin(actualTotal), 143, y + 6.3);
+        y += 12;
+      } else {
+        doc.setTextColor(...green);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(11);
+        doc.text("CUENTA DE CADA SEMANA", 14, 141);
+        y = 145;
+        doc.setFillColor(...green);
+        doc.rect(14, y, 182, 8, "F");
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(7.5);
+        doc.text("SEMANA", 18, y + 5.3);
+        doc.text("COMO SE CALCULO EL RESULTADO", 61, y + 5.3);
+        y += 8;
+        let weekRows = d.weeks
+          .map((w) => {
+            const wes = es.filter(
+                (e) => e.fecha >= w.fecha_inicio && e.fecha <= w.fecha_fin,
+              ),
+              wm = moves.filter((x) => x.semana_id === w.id),
+              base =
+                d.expectedRows.find(
+                  (x) => x.moza_id === m.id && x.semana_id === w.id,
+                )?.minutos_esperados || 0,
+              calculation = computeWeek({
+                entries: wes,
+                movements: wm,
+                expectedMinutes: base,
+              }),
+              actual = calculation.actualMinutes,
+              holiday = calculation.holidayMinutes,
+              bank = calculation.bankUsedMinutes,
+              value = wm.reduce((a, x) => a + Number(x.minutos || 0), 0),
+              raw = calculation.resultMinutes,
+              hasActivity = calculation.hasActivity;
+            let formula;
+            if (raw < 0)
+              formula = `${fmtMin(calculation.expectedMinutes)} base - (${fmtMin(actual)} trabajadas + ${fmtMin(holiday)} feriado + ${fmtMin(bank)} banco) = ${fmtMin(Math.abs(raw))} pendientes`;
+            else
+              formula = `${fmtMin(actual)} trabajadas + ${fmtMin(holiday)} feriado + ${fmtMin(bank)} banco - ${fmtMin(calculation.expectedMinutes)} base = ${fmtMin(raw)} a favor`;
+            return {
+              label: `${fmtDate(w.fecha_inicio)} al ${fmtDate(w.fecha_fin)}`,
+              value,
+              formula,
+              hasActivity,
+            };
+          })
+          .filter((x) => x.hasActivity);
+        if (weekRows.length > 15) {
+          const hidden = weekRows.length - 14;
+          weekRows = [
+            {
+              label: `Primeras ${hidden} semanas`,
+              value: weekRows.slice(0, hidden).reduce((a, x) => a + x.value, 0),
+              formula: "Agrupadas para mantener una sola hoja",
+              hasActivity: true,
+            },
+            ...weekRows.slice(-14),
+          ];
+        }
+        for (const row of weekRows) {
+          doc.setFillColor(y % 2 ? 250 : 247, 249, 247);
+          doc.rect(14, y, 182, 8, "F");
+          doc.setTextColor(...ink);
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(6.5);
+          doc.text(safe(row.label), 18, y + 5.2);
+          doc.setFont("helvetica", "bold");
+          doc.text(safe(row.formula), 61, y + 5.2);
+          y += 8;
+        }
+        doc.setFillColor(...pale);
+        doc.rect(14, y, 182, 9, "F");
+        doc.setTextColor(...green);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        doc.text("RESULTADO ACUMULADO DEL PERIODO", 18, y + 5.8);
+        doc.text(safe(balanceText(periodValue)), 192, y + 5.8, {
+          align: "right",
+        });
+        y += 12;
+      }
+    }
+    const pages = doc.getNumberOfPages();
+    for (let i = 1; i <= pages; i++) {
+      doc.setPage(i);
+      doc.setDrawColor(220);
+      doc.line(14, 283, 196, 283);
+      doc.setTextColor(...muted);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7);
+      doc.text(
+        `Generado el ${new Date().toLocaleString("es-AR")} - ${state.user.email}`,
+        14,
+        289,
+      );
+      doc.text(`Pagina ${i} de ${pages}`, 196, 289, { align: "right" });
+    }
+    doc.save(
+      `informe-horas-${d.start}-${d.end}${individual ? `-${people[0].nombre}` : "-general"}.pdf`,
+    );
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+$("download-pdf").onclick = downloadPdf;
+async function previewDelete() {
+  const month = $("delete-month").value;
+  if (!month) return toast("Elegí un mes", true);
+  if (month >= today().slice(0, 7))
+    return toast("Solo se pueden eliminar meses anteriores", true);
+  const start = `${month}-01`,
+    end = `${month}-${new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()}`,
+    [weeks, entries] = await Promise.all([
+      supabase
+        .from("semanas")
+        .select("*")
+        .gte("fecha_inicio", start)
+        .lte("fecha_inicio", end),
+      supabase
+        .from("registros_horarios")
+        .select("id", { count: "exact" })
+        .gte("fecha", start)
+        .lte("fecha", end),
+    ]);
+  if (weeks.error || entries.error)
+    return toast((weeks.error || entries.error).message, true);
+  if (weeks.data.some((w) => w.estado === "abierta"))
+    return toast("El mes contiene semanas abiertas", true);
+  const box = $("delete-preview");
+  box.classList.remove("hidden");
+  box.innerHTML = `<div class="delete-summary"><strong>Se eliminarán ${entries.count || 0} registros y ${weeks.data.length} semanas.</strong><p>Los saldos pendientes se trasladarán automáticamente.</p><label>Para confirmar escribí ELIMINAR ${month}<input id="delete-confirm" autocomplete="off"></label><button id="delete-final" class="danger-button">Eliminar definitivamente</button></div>`;
+  $("delete-final").onclick = () => deleteMonth(month, start, end, weeks.data);
+}
+$("preview-delete").onclick = previewDelete;
+async function deleteMonth(month, start, end, weeks) {
+  if ($("delete-confirm").value !== `ELIMINAR ${month}`)
+    return toast("La confirmación no coincide", true);
+  if (!confirm("Esta eliminación es definitiva. ¿Continuar?")) return;
+  const nextDate = localIso(
+      new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 1),
+    ),
+    weekIds = weeks.map((w) => w.id),
+    balances = [];
+  for (const m of state.mozas) {
+    const { data, error } = await supabase
+      .from("movimientos_horas")
+      .select("minutos")
+      .eq("moza_id", m.id)
+      .gte("fecha", start)
+      .lte("fecha", end);
+    if (error) return toast(error.message, true);
+    const amount = data.reduce((a, x) => a + x.minutos, 0);
+    if (amount)
+      balances.push({
+        moza_id: m.id,
+        semana_id: null,
+        fecha: nextDate,
+        minutos: amount,
+        tipo: "ajuste",
+        modalidad: "Saldo trasladado",
+        observacion: `Saldo trasladado al eliminar ${month}`,
+        cargado_por: state.user.id,
+      });
+  }
+  let result = await supabase
+    .from("movimientos_horas")
+    .delete()
+    .gte("fecha", start)
+    .lte("fecha", end);
+  if (result.error) return toast(result.error.message, true);
+  result = await supabase
+    .from("registros_horarios")
+    .delete()
+    .gte("fecha", start)
+    .lte("fecha", end);
+  if (result.error) return toast(result.error.message, true);
+  if (weekIds.length) {
+    result = await supabase
+      .from("horas_esperadas")
+      .delete()
+      .in("semana_id", weekIds);
+    if (!result.error)
+      result = await supabase.from("semanas").delete().in("id", weekIds);
+    if (result.error) return toast(result.error.message, true);
+  }
+  if (balances.length) {
+    result = await supabase.from("movimientos_horas").insert(balances);
+    if (result.error) return toast(result.error.message, true);
+  }
+  $("delete-preview").classList.add("hidden");
+  await load();
+  toast("Mes eliminado y saldos trasladados");
+}
+if (configured) {
+  const { data } = await supabase.auth.getSession();
+  if (data.session) {
+    state.user = data.session.user;
+    try {
+      await load();
+    } catch (e) {
+      showLogin(e.message);
+    }
+  } else showLogin();
+} else showLogin();
